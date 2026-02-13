@@ -7,7 +7,17 @@ const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets, isMessageProcessed } = require('./sheets');
 const { verifyWebhookSignature, extractWebhookData, sendReply } = require('./zalo');
-const { processVehicleEvent, checkTimeAlerts } = require('./matcher');
+const {
+  processVehicleEvent,
+  checkTimeAlerts,
+  handleLookup,
+  handleProgressUpdate,
+  handleCustomerRegister,
+  handleDailyReport,
+  handleHelp,
+  sendScheduledDailyReport,
+} = require('./matcher');
+const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const logger = require('./logger');
 
 // ──────────────────────────────────────────────
@@ -117,12 +127,26 @@ async function bootstrap() {
     }
   });
 
+  // Trigger daily report manually
+  app.post('/admin/daily-report', async (_req, res) => {
+    try {
+      const report = await handleDailyReport(null, config);
+      res.json({ status: 'ok', report: report.replyMessage });
+    } catch (err) {
+      logger.error('Daily report failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Start server
   const port = config.port;
   app.listen(port, () => {
     logger.info(`Server started on port ${port}`);
     logger.info('Xưởng VinFast Phúc Lợi - Hệ thống theo dõi xe vào/ra');
     logger.info('Webhook URL: POST /webhook/zalo');
+    if (config.manager.zaloIds.length > 0) {
+      logger.info(`Manager Zalo IDs configured: ${config.manager.zaloIds.length}`);
+    }
   });
 
   // Chạy check alerts mỗi 30 phút
@@ -136,6 +160,9 @@ async function bootstrap() {
       logger.error('Periodic alert check failed', { error: err.message });
     }
   }, 30 * 60 * 1000);
+
+  // Báo cáo tự động cuối ngày
+  scheduleDailyReport();
 }
 
 // ──────────────────────────────────────────────
@@ -144,6 +171,39 @@ async function bootstrap() {
 
 async function processWebhookAsync(data) {
   const { messageId, senderId, text, imageUrl } = data;
+
+  // Parse tin nhắn trước để xác định action
+  const parsed = parseMessage(text);
+
+  // ═══════════ TEXT-ONLY COMMANDS (không cần ảnh) ═══════════
+  if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
+    let result;
+
+    switch (parsed.action) {
+      case 'TRACUU':
+        result = await handleLookup(parsed.params, senderId, config);
+        break;
+      case 'CAPNHAT':
+        result = await handleProgressUpdate(parsed.params, senderId, config);
+        break;
+      case 'DANGKY':
+        result = await handleCustomerRegister(parsed.params, senderId, config);
+        break;
+      case 'BAOCAO':
+        result = await handleDailyReport(senderId, config);
+        break;
+      case 'HUONGDAN':
+        result = handleHelp();
+        break;
+    }
+
+    if (result && result.replyMessage) {
+      await sendReply(senderId, result.replyMessage, config.zalo.accessToken);
+    }
+    return;
+  }
+
+  // ═══════════ IMAGE-BASED COMMANDS (VAO/RA - cần ảnh) ═══════════
 
   // Kiểm tra: phải có ảnh
   if (!imageUrl) {
@@ -154,7 +214,8 @@ async function processWebhookAsync(data) {
       '1. Ảnh chụp biển số xe\n' +
       '2. Kèm nội dung: VAO hoặc RA\n\n' +
       'Ví dụ: Gửi ảnh + text "VAO" hoặc "RA"\n' +
-      'Mở rộng: "VAO | xe tải" hoặc "RA | xe con"',
+      'Mở rộng: "VAO | xe tải" hoặc "RA | xe con"\n\n' +
+      'Gõ HUONGDAN để xem tất cả lệnh.',
       config.zalo.accessToken
     );
     return;
@@ -187,6 +248,41 @@ async function processWebhookAsync(data) {
   await checkTimeAlerts(config).catch(err => {
     logger.error('Post-event alert check failed', { error: err.message });
   });
+}
+
+// ──────────────────────────────────────────────
+// Scheduled daily report
+// ──────────────────────────────────────────────
+
+function scheduleDailyReport() {
+  const reportHour = config.manager.dailyReportHour;
+  const managerIds = config.manager.zaloIds;
+
+  if (managerIds.length === 0) {
+    logger.info('No manager Zalo IDs configured - daily report disabled');
+    return;
+  }
+
+  // Check mỗi phút xem đã đến giờ gửi báo cáo chưa
+  let lastReportDate = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    // Gửi báo cáo 1 lần/ngày vào đúng giờ cấu hình
+    if (currentHour === reportHour && lastReportDate !== todayStr) {
+      lastReportDate = todayStr;
+      try {
+        await sendScheduledDailyReport(config);
+      } catch (err) {
+        logger.error('Scheduled daily report failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000); // Check mỗi 60 giây
+
+  logger.info(`Daily report scheduled at ${reportHour}:00`);
 }
 
 // ──────────────────────────────────────────────

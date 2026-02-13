@@ -28,6 +28,13 @@ function generateErrorId(tz) {
   return `ERR-${ts}-${rand}`;
 }
 
+/** Mã cập nhật tiến độ: CN-YYMMDDHHmmss-XXXX */
+function generateProgressId(tz) {
+  const ts = DateTime.now().setZone(tz).toFormat('yyMMddHHmmss');
+  const rand = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `CN-${ts}-${rand}`;
+}
+
 // ──────────────────────────────────────────────
 // Time Formatting
 // ──────────────────────────────────────────────
@@ -52,6 +59,17 @@ function hoursSince(startStr, tz) {
   const start = DateTime.fromFormat(startStr, fmt, { zone: tz });
   if (!start.isValid) return 0;
   return DateTime.now().setZone(tz).diff(start, 'hours').hours;
+}
+
+/** Format số phút thành chuỗi đẹp "X giờ Y phút" */
+function formatDuration(minutes) {
+  if (!minutes && minutes !== 0) return '';
+  const m = parseInt(minutes, 10);
+  if (isNaN(m)) return '';
+  const hours = Math.floor(m / 60);
+  const mins = m % 60;
+  if (hours > 0) return `${hours} giờ ${mins} phút`;
+  return `${mins} phút`;
 }
 
 // ──────────────────────────────────────────────
@@ -98,14 +116,25 @@ function isValidVietnamPlate(plate) {
 // ──────────────────────────────────────────────
 
 /**
- * Parse text tin nhắn để xác định loại ghi nhận + loại xe.
- * Trả về { action: 'VAO'|'RA'|null, vehicleType: string|'' }
+ * Danh sách commands không cần ảnh (text-only).
+ */
+const TEXT_ONLY_ACTIONS = ['TRACUU', 'CAPNHAT', 'DANGKY', 'BAOCAO', 'HUONGDAN'];
+
+/**
+ * Parse text tin nhắn để xác định loại ghi nhận.
+ * Trả về { action, vehicleType, params }
  *
- * Chấp nhận: "VAO", "vao", "VÀO", "RA"
- * Option mở rộng: "VAO | xe tải", "RA | xe con"
+ * Các lệnh:
+ * - VAO [| loại xe]           → Ghi nhận xe vào (cần ảnh)
+ * - RA [| loại xe]            → Ghi nhận xe ra (cần ảnh)
+ * - TRACUU <biển số>          → Tra cứu trạng thái xe
+ * - CAPNHAT <biển số> | <nội dung> → Cập nhật tiến độ sửa chữa
+ * - DANGKY <biển số> | <SĐT>  → Đăng ký SĐT khách hàng
+ * - BAOCAO                    → Xem báo cáo tổng hợp
+ * - HUONGDAN / HELP           → Xem hướng dẫn sử dụng
  */
 function parseMessage(text) {
-  if (!text) return { action: null, vehicleType: '' };
+  if (!text) return { action: null, vehicleType: '', params: '' };
 
   const normalized = text
     .normalize('NFD')
@@ -115,22 +144,37 @@ function parseMessage(text) {
 
   let action = null;
   let vehicleType = '';
+  let params = '';
 
   // Tách phần action và phần mô tả bằng dấu |
   const parts = normalized.split('|').map(p => p.trim());
-
   const keyword = parts[0];
-  if (/^(VAO|VA O|V AO)$/.test(keyword) || keyword === 'VÀO' || keyword === 'VAO') {
+
+  // Detect multi-word commands (keyword + params)
+  if (/^TRACUU\b/.test(keyword)) {
+    action = 'TRACUU';
+    params = keyword.replace(/^TRACUU\s*/, '').trim();
+  } else if (/^CAPNHAT\b/.test(keyword)) {
+    action = 'CAPNHAT';
+    params = keyword.replace(/^CAPNHAT\s*/, '').trim();
+    if (parts[1]) params += '|' + parts[1].trim();
+  } else if (/^DANGKY\b/.test(keyword)) {
+    action = 'DANGKY';
+    params = keyword.replace(/^DANGKY\s*/, '').trim();
+    if (parts[1]) params += '|' + parts[1].trim();
+  } else if (/^BAOCAO$/.test(keyword)) {
+    action = 'BAOCAO';
+  } else if (/^(HUONGDAN|HELP)$/.test(keyword)) {
+    action = 'HUONGDAN';
+  } else if (/^(VAO|VA O|V AO)$/.test(keyword) || keyword === 'VAO') {
     action = 'VAO';
+    if (parts[1]) vehicleType = parts[1].trim();
   } else if (/^RA$/.test(keyword)) {
     action = 'RA';
+    if (parts[1]) vehicleType = parts[1].trim();
   }
 
-  if (parts[1]) {
-    vehicleType = parts[1].trim();
-  }
-
-  return { action, vehicleType };
+  return { action, vehicleType, params };
 }
 
 // ──────────────────────────────────────────────
@@ -147,11 +191,14 @@ module.exports = {
   generateVehicleId,
   generateEventId,
   generateErrorId,
+  generateProgressId,
   nowFormatted,
   calcMinutesBetween,
   hoursSince,
+  formatDuration,
   normalizePlate,
   isValidVietnamPlate,
   parseMessage,
   confidenceLabel,
+  TEXT_ONLY_ACTIONS,
 };

@@ -25,6 +25,16 @@ const COLUMNS = {
     'Mã lỗi', 'Mã sự kiện', 'Thời điểm', 'Ảnh', 'Biển số (AI đọc)',
     'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú người kiểm tra',
   ],
+  progress: [
+    'Mã cập nhật', 'Mã lượt xe', 'Biển số', 'Thời điểm',
+    'Nội dung cập nhật', 'Người cập nhật',
+  ],
+  staff: [
+    'Zalo ID', 'Tên nhân viên', 'Vai trò', 'Trạng thái', 'Ngày thêm',
+  ],
+  customer: [
+    'Biển số', 'SĐT khách hàng', 'Tên khách hàng', 'Ngày đăng ký', 'Ghi chú',
+  ],
 };
 
 // ──────────────────────────────────────────────
@@ -42,7 +52,7 @@ async function initSheets(config) {
 
   sheetsApi = google.sheets({ version: 'v4', auth });
 
-  // Đảm bảo 3 tab tồn tại với header đúng
+  // Đảm bảo tất cả tab tồn tại với header đúng
   await ensureTabs();
   logger.info('Google Sheets initialized', { spreadsheetId });
 }
@@ -58,6 +68,9 @@ async function ensureTabs() {
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
+    { key: 'progress', name: tabNames.progress, columns: COLUMNS.progress },
+    { key: 'staff', name: tabNames.staff, columns: COLUMNS.staff },
+    { key: 'customer', name: tabNames.customer, columns: COLUMNS.customer },
   ];
 
   const requests = [];
@@ -218,12 +231,107 @@ async function getAllInWorkshop() {
         rowIndex: i + 1,
         vehicleId: row[0],
         plate: row[1],
+        vehicleType: row[2],
         timeIn: row[3],
         priority: row[9],
       });
     }
   }
   return results;
+}
+
+/**
+ * Lấy lịch sử tất cả lượt của 1 biển số (mới nhất trước).
+ */
+async function getVehicleHistory(plate) {
+  const range = `'${tabNames.main}'!A:L`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+  const results = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row[1] === plate) {
+      results.push({
+        vehicleId: row[0],
+        plate: row[1],
+        vehicleType: row[2],
+        timeIn: row[3],
+        timeOut: row[4],
+        duration: row[5],
+        status: row[8],
+        priority: row[9],
+        note: row[10],
+      });
+    }
+  }
+
+  return results.reverse(); // Mới nhất trước
+}
+
+/**
+ * Lấy thống kê tổng hợp cho báo cáo.
+ */
+async function getDailySummary(tz) {
+  const { DateTime } = require('luxon');
+  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
+
+  const range = `'${tabNames.main}'!A:L`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+
+  let totalIn = 0;
+  let totalOut = 0;
+  let inWorkshop = 0;
+  let warningCount = 0;
+  let urgentCount = 0;
+  let totalDuration = 0;
+  let completedCount = 0;
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const timeIn = row[3] || '';
+    const timeOut = row[4] || '';
+    const duration = parseInt(row[5], 10);
+    const status = row[8] || '';
+    const priority = row[9] || '';
+
+    // Xe vào hôm nay
+    if (timeIn.startsWith(today)) totalIn++;
+    // Xe ra hôm nay
+    if (timeOut.startsWith(today)) totalOut++;
+    // Đang trong xưởng
+    if (status === 'Đang trong xưởng') {
+      inWorkshop++;
+      if (priority === 'Cảnh báo') warningCount++;
+      if (priority === 'Khẩn') urgentCount++;
+    }
+    // Tính trung bình thời gian hoàn thành (chỉ xe đã ra hôm nay)
+    if (timeOut.startsWith(today) && !isNaN(duration)) {
+      totalDuration += duration;
+      completedCount++;
+    }
+  }
+
+  // Đếm mục CẦN KIỂM TRA chưa xử lý
+  const reviewRange = `'${tabNames.review}'!A:I`;
+  const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
+  const reviewRows = reviewRes.data.values || [];
+  let pendingReview = 0;
+  for (let i = 1; i < reviewRows.length; i++) {
+    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
+  }
+
+  return {
+    today,
+    totalIn,
+    totalOut,
+    inWorkshop,
+    warningCount,
+    urgentCount,
+    pendingReview,
+    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
+  };
 }
 
 // ──────────────────────────────────────────────
@@ -312,6 +420,171 @@ async function appendReviewRow(row) {
 }
 
 // ──────────────────────────────────────────────
+// TIẾN ĐỘ SỬA CHỮA
+// ──────────────────────────────────────────────
+
+/**
+ * Thêm 1 dòng cập nhật tiến độ sửa chữa.
+ */
+async function appendProgressRow(row) {
+  const values = [[
+    row.progressId,
+    row.vehicleId || '',
+    row.plate,
+    row.timestamp,
+    row.content,
+    row.updatedBy || '',
+  ]];
+
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${tabNames.progress}'!A:F`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values },
+  });
+
+  logger.info('Appended progress row', { progressId: row.progressId, plate: row.plate });
+}
+
+/**
+ * Lấy tiến độ sửa chữa cho 1 biển số (mới nhất trước).
+ */
+async function getProgressByPlate(plate) {
+  const range = `'${tabNames.progress}'!A:F`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+  const results = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row[2] === plate) {
+      results.push({
+        progressId: row[0],
+        vehicleId: row[1],
+        plate: row[2],
+        timestamp: row[3],
+        content: row[4],
+        updatedBy: row[5],
+      });
+    }
+  }
+
+  return results.reverse(); // Mới nhất trước
+}
+
+// ──────────────────────────────────────────────
+// NHÂN VIÊN
+// ──────────────────────────────────────────────
+
+/**
+ * Tìm nhân viên theo Zalo ID.
+ */
+async function getStaffByZaloId(zaloId) {
+  const range = `'${tabNames.staff}'!A:E`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === zaloId && rows[i][3] === 'Hoạt động') {
+      return {
+        zaloId: rows[i][0],
+        name: rows[i][1],
+        role: rows[i][2],
+        status: rows[i][3],
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Lấy tất cả nhân viên đang hoạt động.
+ */
+async function getAllActiveStaff() {
+  const range = `'${tabNames.staff}'!A:E`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+  const results = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][3] === 'Hoạt động') {
+      results.push({
+        zaloId: rows[i][0],
+        name: rows[i][1],
+        role: rows[i][2],
+      });
+    }
+  }
+  return results;
+}
+
+// ──────────────────────────────────────────────
+// KHÁCH HÀNG
+// ──────────────────────────────────────────────
+
+/**
+ * Đăng ký / cập nhật SĐT khách hàng cho 1 biển số.
+ */
+async function registerCustomer(plate, phone, name, timestamp) {
+  // Kiểm tra đã tồn tại chưa
+  const existing = await getCustomerByPlate(plate);
+  if (existing) {
+    // Cập nhật SĐT
+    const range = `'${tabNames.customer}'!A:E`;
+    const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+    const rows = res.data.values || [];
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][0] === plate) {
+        const rowIndex = i + 1;
+        await sheetsApi.spreadsheets.values.update({
+          spreadsheetId,
+          range: `'${tabNames.customer}'!B${rowIndex}:D${rowIndex}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[phone, name || existing.name, timestamp]] },
+        });
+        logger.info('Updated customer', { plate, phone });
+        return 'updated';
+      }
+    }
+  }
+
+  // Thêm mới
+  const values = [[plate, phone, name || '', timestamp, '']];
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${tabNames.customer}'!A:E`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values },
+  });
+
+  logger.info('Registered customer', { plate, phone });
+  return 'created';
+}
+
+/**
+ * Tìm khách hàng theo biển số.
+ */
+async function getCustomerByPlate(plate) {
+  const range = `'${tabNames.customer}'!A:E`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === plate) {
+      return {
+        plate: rows[i][0],
+        phone: rows[i][1],
+        name: rows[i][2],
+        registeredAt: rows[i][3],
+      };
+    }
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────
 // Idempotency check (dùng NHẬT KÝ GHI NHẬN)
 // ──────────────────────────────────────────────
 
@@ -353,9 +626,17 @@ module.exports = {
   findMainRow,
   updateMainRow,
   getAllInWorkshop,
+  getVehicleHistory,
+  getDailySummary,
   appendLogRow,
   updateLogResult,
   appendReviewRow,
+  appendProgressRow,
+  getProgressByPlate,
+  getStaffByZaloId,
+  getAllActiveStaff,
+  registerCustomer,
+  getCustomerByPlate,
   isMessageProcessed,
   COLUMNS,
 };

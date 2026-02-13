@@ -11,6 +11,9 @@ const {
   generateVehicleId,
   generateEventId,
   generateErrorId,
+  generateProgressId,
+  formatDuration,
+  TEXT_ONLY_ACTIONS,
 } = require('../src/utils');
 
 // ──────────────────────────────────────────────
@@ -60,18 +63,29 @@ describe('isValidVietnamPlate', () => {
 });
 
 // ──────────────────────────────────────────────
-// Test: parseMessage
+// Test: parseMessage - VAO/RA (original)
 // ──────────────────────────────────────────────
 
 describe('parseMessage', () => {
   it('nhận diện VAO', () => {
-    assert.deepEqual(parseMessage('VAO'), { action: 'VAO', vehicleType: '' });
-    assert.deepEqual(parseMessage('vao'), { action: 'VAO', vehicleType: '' });
+    const r = parseMessage('VAO');
+    assert.equal(r.action, 'VAO');
+    assert.equal(r.vehicleType, '');
+    assert.equal(r.params, '');
+  });
+
+  it('nhận diện vao (lowercase)', () => {
+    assert.equal(parseMessage('vao').action, 'VAO');
   });
 
   it('nhận diện RA', () => {
-    assert.deepEqual(parseMessage('RA'), { action: 'RA', vehicleType: '' });
-    assert.deepEqual(parseMessage('ra'), { action: 'RA', vehicleType: '' });
+    const r = parseMessage('RA');
+    assert.equal(r.action, 'RA');
+    assert.equal(r.vehicleType, '');
+  });
+
+  it('nhận diện ra (lowercase)', () => {
+    assert.equal(parseMessage('ra').action, 'RA');
   });
 
   it('nhận diện VAO với loại xe', () => {
@@ -88,6 +102,97 @@ describe('parseMessage', () => {
 });
 
 // ──────────────────────────────────────────────
+// Test: parseMessage - New commands
+// ──────────────────────────────────────────────
+
+describe('parseMessage - TRACUU', () => {
+  it('nhận diện TRACUU với biển số', () => {
+    const r = parseMessage('TRACUU 30A-12345');
+    assert.equal(r.action, 'TRACUU');
+    assert.equal(r.params, '30A-12345');
+  });
+
+  it('nhận diện tracuu (lowercase)', () => {
+    const r = parseMessage('tracuu 30A-12345');
+    assert.equal(r.action, 'TRACUU');
+    assert.equal(r.params, '30A-12345');
+  });
+
+  it('nhận diện TRACUU không có biển số', () => {
+    const r = parseMessage('TRACUU');
+    assert.equal(r.action, 'TRACUU');
+    assert.equal(r.params, '');
+  });
+});
+
+describe('parseMessage - CAPNHAT', () => {
+  it('nhận diện CAPNHAT với biển số và nội dung', () => {
+    const r = parseMessage('CAPNHAT 30A-12345 | Đang kiểm tra');
+    assert.equal(r.action, 'CAPNHAT');
+    assert.ok(r.params.includes('30A-12345'));
+    // "Đ" (U+0110) không bị strip bởi NFD, nên vẫn giữ nguyên
+    assert.ok(r.params.includes('KIEM TRA'));
+  });
+
+  it('nhận diện CAPNHAT không có nội dung', () => {
+    const r = parseMessage('CAPNHAT 30A-12345');
+    assert.equal(r.action, 'CAPNHAT');
+    assert.equal(r.params, '30A-12345');
+  });
+});
+
+describe('parseMessage - DANGKY', () => {
+  it('nhận diện DANGKY với biển số và SĐT', () => {
+    const r = parseMessage('DANGKY 30A-12345 | 0901234567');
+    assert.equal(r.action, 'DANGKY');
+    assert.ok(r.params.includes('30A-12345'));
+    assert.ok(r.params.includes('0901234567'));
+  });
+});
+
+describe('parseMessage - BAOCAO', () => {
+  it('nhận diện BAOCAO', () => {
+    const r = parseMessage('BAOCAO');
+    assert.equal(r.action, 'BAOCAO');
+  });
+
+  it('nhận diện baocao (lowercase)', () => {
+    const r = parseMessage('baocao');
+    assert.equal(r.action, 'BAOCAO');
+  });
+});
+
+describe('parseMessage - HUONGDAN', () => {
+  it('nhận diện HUONGDAN', () => {
+    assert.equal(parseMessage('HUONGDAN').action, 'HUONGDAN');
+  });
+
+  it('nhận diện HELP', () => {
+    assert.equal(parseMessage('HELP').action, 'HUONGDAN');
+  });
+
+  it('nhận diện help (lowercase)', () => {
+    assert.equal(parseMessage('help').action, 'HUONGDAN');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Test: TEXT_ONLY_ACTIONS
+// ──────────────────────────────────────────────
+
+describe('TEXT_ONLY_ACTIONS', () => {
+  it('chứa đúng các command text-only', () => {
+    assert.ok(TEXT_ONLY_ACTIONS.includes('TRACUU'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('CAPNHAT'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('DANGKY'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('BAOCAO'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('HUONGDAN'));
+    assert.ok(!TEXT_ONLY_ACTIONS.includes('VAO'));
+    assert.ok(!TEXT_ONLY_ACTIONS.includes('RA'));
+  });
+});
+
+// ──────────────────────────────────────────────
 // Test: calcMinutesBetween
 // ──────────────────────────────────────────────
 
@@ -98,6 +203,32 @@ describe('calcMinutesBetween', () => {
 
   it('trả empty string cho input invalid', () => {
     assert.equal(calcMinutesBetween('invalid', '12/02/2026 10:30:00'), '');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Test: formatDuration
+// ──────────────────────────────────────────────
+
+describe('formatDuration', () => {
+  it('format phút thường', () => {
+    assert.equal(formatDuration(30), '30 phút');
+    assert.equal(formatDuration(0), '0 phút');
+  });
+
+  it('format giờ + phút', () => {
+    assert.equal(formatDuration(150), '2 giờ 30 phút');
+    assert.equal(formatDuration(60), '1 giờ 0 phút');
+  });
+
+  it('format string number', () => {
+    assert.equal(formatDuration('90'), '1 giờ 30 phút');
+  });
+
+  it('trả empty string cho invalid', () => {
+    assert.equal(formatDuration(''), '');
+    assert.equal(formatDuration(null), '');
+    assert.equal(formatDuration(undefined), '');
   });
 });
 
@@ -134,6 +265,7 @@ describe('ID generation', () => {
     assert.match(generateVehicleId(tz), /^LX-\d{12}-[A-F0-9]{4}$/);
     assert.match(generateEventId(tz), /^SK-\d{12}-[A-F0-9]{4}$/);
     assert.match(generateErrorId(tz), /^ERR-\d{12}-[A-F0-9]{4}$/);
+    assert.match(generateProgressId(tz), /^CN-\d{12}-[A-F0-9]{4}$/);
   });
 
   it('tạo ID unique', () => {

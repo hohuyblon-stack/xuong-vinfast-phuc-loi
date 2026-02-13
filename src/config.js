@@ -36,6 +36,9 @@ function loadConfig() {
         main: 'DANH SÁCH CHÍNH',
         log: 'NHẬT KÝ GHI NHẬN',
         review: 'CẦN KIỂM TRA',
+        progress: 'TIẾN ĐỘ SỬA CHỮA',
+        staff: 'NHÂN VIÊN',
+        customer: 'KHÁCH HÀNG',
       },
     },
 
@@ -52,6 +55,16 @@ function loadConfig() {
     alerts: {
       warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '4')),
       urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '8')),
+    },
+
+    // Quản lý
+    manager: {
+      zaloIds: optionalEnv('MANAGER_ZALO_IDS', '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean),
+      dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
+      customerNotifyOnExit: optionalEnv('CUSTOMER_NOTIFY_ON_EXIT', 'true') === 'true',
     },
 
     // Timezone
