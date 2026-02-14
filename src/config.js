@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Cấu hình tập trung - đọc từ ENV, validate, export.
+ * Cau hinh tap trung - doc tu ENV, validate, export.
  */
 
 function requireEnv(key) {
@@ -21,11 +21,10 @@ function loadConfig() {
     port: parseInt(optionalEnv('PORT', '3000'), 10),
     nodeEnv: optionalEnv('NODE_ENV', 'development'),
 
-    // Zalo OA
-    zalo: {
-      accessToken: requireEnv('ZALO_OA_ACCESS_TOKEN'),
-      secretKey: requireEnv('ZALO_OA_SECRET_KEY'),
-      webhookVerifyToken: optionalEnv('ZALO_WEBHOOK_VERIFY_TOKEN', ''),
+    // Telegram Bot
+    telegram: {
+      botToken: requireEnv('TELEGRAM_BOT_TOKEN'),
+      webhookUrl: optionalEnv('TELEGRAM_WEBHOOK_URL', ''),
     },
 
     // Google Sheets
@@ -33,12 +32,9 @@ function loadConfig() {
       spreadsheetId: requireEnv('GOOGLE_SHEET_ID'),
       credentials: JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
       tabNames: {
-        main: 'DANH SÁCH CHÍNH',
-        log: 'NHẬT KÝ GHI NHẬN',
-        review: 'CẦN KIỂM TRA',
-        progress: 'TIẾN ĐỘ SỬA CHỮA',
-        staff: 'NHÂN VIÊN',
-        customer: 'KHÁCH HÀNG',
+        main: 'DANH SACH CHINH',
+        log: 'NHAT KY',
+        review: 'CAN KIEM TRA',
       },
     },
 
@@ -51,20 +47,19 @@ function loadConfig() {
       confidenceMedium: parseFloat(optionalEnv('OCR_CONFIDENCE_MEDIUM', '0.5')),
     },
 
-    // Cảnh báo
+    // Canh bao
     alerts: {
-      warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '4')),
-      urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '8')),
+      warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '24')),
+      urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '48')),
     },
 
-    // Quản lý
+    // Quan ly
     manager: {
-      zaloIds: optionalEnv('MANAGER_ZALO_IDS', '')
+      chatIds: optionalEnv('MANAGER_CHAT_IDS', '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean),
       dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
-      customerNotifyOnExit: optionalEnv('CUSTOMER_NOTIFY_ON_EXIT', 'true') === 'true',
     },
 
     // Timezone

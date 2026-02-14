@@ -8,32 +8,22 @@ let spreadsheetId = '';
 let tabNames = {};
 
 // ──────────────────────────────────────────────
-// Column definitions cho mỗi tab
+// Column definitions cho moi tab
 // ──────────────────────────────────────────────
 
 const COLUMNS = {
   main: [
-    'Mã lượt xe', 'Biển số', 'Loại xe', 'Giờ vào', 'Giờ ra',
-    'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
-    'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
+    'Ma luot xe', 'Bien so', 'Gio vao', 'Gio ra',
+    'Luu trong xuong (phut)', 'Anh luc vao', 'Anh luc ra',
+    'Trang thai', 'Muc uu tien', 'Ghi chu', 'Cap nhat luc',
   ],
   log: [
-    'Mã sự kiện', 'Thời điểm', 'Loại ghi nhận', 'Biển số (AI đọc)',
-    'Chất lượng nhận dạng', 'Ảnh', 'Người gửi', 'Tin nhắn gốc', 'Kết quả xử lý',
+    'Ma su kien', 'Thoi diem', 'Loai ghi nhan', 'Bien so (AI doc)',
+    'Chat luong nhan dang', 'Anh', 'Nguoi gui', 'Tin nhan goc', 'Ket qua xu ly',
   ],
   review: [
-    'Mã lỗi', 'Mã sự kiện', 'Thời điểm', 'Ảnh', 'Biển số (AI đọc)',
-    'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú người kiểm tra',
-  ],
-  progress: [
-    'Mã cập nhật', 'Mã lượt xe', 'Biển số', 'Thời điểm',
-    'Nội dung cập nhật', 'Người cập nhật',
-  ],
-  staff: [
-    'Zalo ID', 'Tên nhân viên', 'Vai trò', 'Trạng thái', 'Ngày thêm',
-  ],
-  customer: [
-    'Biển số', 'SĐT khách hàng', 'Tên khách hàng', 'Ngày đăng ký', 'Ghi chú',
+    'Ma loi', 'Ma su kien', 'Thoi diem', 'Anh', 'Bien so (AI doc)',
+    'Ly do', 'Huong xu ly', 'Trang thai xu ly', 'Ghi chu',
   ],
 };
 
@@ -52,13 +42,12 @@ async function initSheets(config) {
 
   sheetsApi = google.sheets({ version: 'v4', auth });
 
-  // Đảm bảo tất cả tab tồn tại với header đúng
   await ensureTabs();
   logger.info('Google Sheets initialized', { spreadsheetId });
 }
 
 /**
- * Tạo tab nếu chưa có, ghi header nếu tab trống.
+ * Tao tab neu chua co, ghi header neu tab trong.
  */
 async function ensureTabs() {
   const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
@@ -68,9 +57,6 @@ async function ensureTabs() {
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
-    { key: 'progress', name: tabNames.progress, columns: COLUMNS.progress },
-    { key: 'staff', name: tabNames.staff, columns: COLUMNS.staff },
-    { key: 'customer', name: tabNames.customer, columns: COLUMNS.customer },
   ];
 
   const requests = [];
@@ -90,7 +76,6 @@ async function ensureTabs() {
     logger.info('Created missing tabs', { count: requests.length });
   }
 
-  // Ghi header nếu tab trống
   for (const tab of tabConfigs) {
     const range = `'${tab.name}'!A1:${colLetter(tab.columns.length)}1`;
     const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
@@ -107,33 +92,30 @@ async function ensureTabs() {
 }
 
 // ──────────────────────────────────────────────
-// DANH SÁCH CHÍNH
+// DANH SACH CHINH (11 columns: A-K)
 // ──────────────────────────────────────────────
 
 /**
- * Thêm 1 dòng vào "DANH SÁCH CHÍNH".
- * @param {object} row - { vehicleId, plate, vehicleType, timeIn, timeOut,
- *   duration, imageIn, imageOut, status, priority, note, updatedAt }
+ * Them 1 dong vao "DANH SACH CHINH".
  */
 async function appendMainRow(row) {
   const values = [[
     row.vehicleId,
     row.plate,
-    row.vehicleType || '',
     row.timeIn || '',
     row.timeOut || '',
     row.duration || '',
     row.imageIn || '',
     row.imageOut || '',
-    row.status || 'Đang trong xưởng',
-    row.priority || 'Bình thường',
+    row.status || 'Dang trong xuong',
+    row.priority || 'Binh thuong',
     row.note || '',
     row.updatedAt || '',
   ]];
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.main}'!A:L`,
+    range: `'${tabNames.main}'!A:K`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
@@ -143,33 +125,31 @@ async function appendMainRow(row) {
 }
 
 /**
- * Tìm dòng trong "DANH SÁCH CHÍNH" theo biển số + trạng thái.
- * Trả về { rowIndex (1-based, bao gồm header), data } hoặc null.
+ * Tim dong theo bien so + trang thai.
+ * Tra ve { rowIndex (1-based), data } hoac null.
  */
 async function findMainRow(plate, status) {
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
-  // row[0]=header, data bắt đầu từ index 1
   for (let i = rows.length - 1; i >= 1; i--) {
     const row = rows[i];
-    if (row[1] === plate && row[8] === status) {
+    if (row[1] === plate && row[7] === status) {
       return {
-        rowIndex: i + 1, // 1-based (row 1 = header, row 2 = data đầu tiên)
+        rowIndex: i + 1,
         data: {
           vehicleId: row[0],
           plate: row[1],
-          vehicleType: row[2],
-          timeIn: row[3],
-          timeOut: row[4],
-          duration: row[5],
-          imageIn: row[6],
-          imageOut: row[7],
-          status: row[8],
-          priority: row[9],
-          note: row[10],
-          updatedAt: row[11],
+          timeIn: row[2],
+          timeOut: row[3],
+          duration: row[4],
+          imageIn: row[5],
+          imageOut: row[6],
+          status: row[7],
+          priority: row[8],
+          note: row[9],
+          updatedAt: row[10],
         },
       };
     }
@@ -178,26 +158,21 @@ async function findMainRow(plate, status) {
 }
 
 /**
- * Cập nhật 1 dòng trong "DANH SÁCH CHÍNH" (partial update).
- * @param {number} rowIndex - 1-based row number
- * @param {object} updates - fields to update
+ * Cap nhat 1 dong (partial update).
  */
 async function updateMainRow(rowIndex, updates) {
-  // Đọc dòng hiện tại
-  const range = `'${tabNames.main}'!A${rowIndex}:L${rowIndex}`;
+  const range = `'${tabNames.main}'!A${rowIndex}:K${rowIndex}`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const current = (res.data.values && res.data.values[0]) || [];
 
-  // Map field -> column index
   const fieldMap = {
-    vehicleId: 0, plate: 1, vehicleType: 2, timeIn: 3, timeOut: 4,
-    duration: 5, imageIn: 6, imageOut: 7, status: 8, priority: 9,
-    note: 10, updatedAt: 11,
+    vehicleId: 0, plate: 1, timeIn: 2, timeOut: 3,
+    duration: 4, imageIn: 5, imageOut: 6, status: 7,
+    priority: 8, note: 9, updatedAt: 10,
   };
 
   const updated = [...current];
-  // Pad to 12 columns
-  while (updated.length < 12) updated.push('');
+  while (updated.length < 11) updated.push('');
 
   for (const [field, value] of Object.entries(updates)) {
     if (fieldMap[field] !== undefined) {
@@ -216,24 +191,24 @@ async function updateMainRow(rowIndex, updates) {
 }
 
 /**
- * Lấy tất cả xe "Đang trong xưởng" (để check cảnh báo).
+ * Lay tat ca xe "Dang trong xuong".
  */
 async function getAllInWorkshop() {
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
   const results = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row[8] === 'Đang trong xưởng') {
+    if (row[7] === 'Dang trong xuong') {
       results.push({
         rowIndex: i + 1,
         vehicleId: row[0],
         plate: row[1],
-        vehicleType: row[2],
-        timeIn: row[3],
-        priority: row[9],
+        timeIn: row[2],
+        priority: row[8],
+        note: row[9] || '',
       });
     }
   }
@@ -241,42 +216,13 @@ async function getAllInWorkshop() {
 }
 
 /**
- * Lấy lịch sử tất cả lượt của 1 biển số (mới nhất trước).
- */
-async function getVehicleHistory(plate) {
-  const range = `'${tabNames.main}'!A:L`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row[1] === plate) {
-      results.push({
-        vehicleId: row[0],
-        plate: row[1],
-        vehicleType: row[2],
-        timeIn: row[3],
-        timeOut: row[4],
-        duration: row[5],
-        status: row[8],
-        priority: row[9],
-        note: row[10],
-      });
-    }
-  }
-
-  return results.reverse(); // Mới nhất trước
-}
-
-/**
- * Lấy thống kê tổng hợp cho báo cáo.
+ * Lay thong ke tong hop.
  */
 async function getDailySummary(tz) {
   const { DateTime } = require('luxon');
   const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
 
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -290,36 +236,31 @@ async function getDailySummary(tz) {
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    const timeIn = row[3] || '';
-    const timeOut = row[4] || '';
-    const duration = parseInt(row[5], 10);
-    const status = row[8] || '';
-    const priority = row[9] || '';
+    const timeIn = row[2] || '';
+    const timeOut = row[3] || '';
+    const duration = parseInt(row[4], 10);
+    const status = row[7] || '';
+    const priority = row[8] || '';
 
-    // Xe vào hôm nay
     if (timeIn.startsWith(today)) totalIn++;
-    // Xe ra hôm nay
     if (timeOut.startsWith(today)) totalOut++;
-    // Đang trong xưởng
-    if (status === 'Đang trong xưởng') {
+    if (status === 'Dang trong xuong') {
       inWorkshop++;
-      if (priority === 'Cảnh báo') warningCount++;
-      if (priority === 'Khẩn') urgentCount++;
+      if (priority === 'Canh bao') warningCount++;
+      if (priority === 'Khan') urgentCount++;
     }
-    // Tính trung bình thời gian hoàn thành (chỉ xe đã ra hôm nay)
     if (timeOut.startsWith(today) && !isNaN(duration)) {
       totalDuration += duration;
       completedCount++;
     }
   }
 
-  // Đếm mục CẦN KIỂM TRA chưa xử lý
   const reviewRange = `'${tabNames.review}'!A:I`;
   const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
   const reviewRows = reviewRes.data.values || [];
   let pendingReview = 0;
   for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
+    if (reviewRows[i][7] === 'Chua xu ly') pendingReview++;
   }
 
   return {
@@ -335,17 +276,14 @@ async function getDailySummary(tz) {
 }
 
 // ──────────────────────────────────────────────
-// NHẬT KÝ GHI NHẬN
+// NHAT KY
 // ──────────────────────────────────────────────
 
-/**
- * Thêm 1 dòng vào "NHẬT KÝ GHI NHẬN".
- */
 async function appendLogRow(row) {
   const values = [[
     row.eventId,
     row.timestamp,
-    row.recordType || 'Không xác định',
+    row.recordType || 'Khong xac dinh',
     row.plateAI || '',
     row.confidenceLabel || '',
     row.imageUrl || '',
@@ -365,9 +303,6 @@ async function appendLogRow(row) {
   logger.info('Appended log row', { eventId: row.eventId });
 }
 
-/**
- * Cập nhật cột "Kết quả xử lý" cho 1 sự kiện đã ghi.
- */
 async function updateLogResult(eventId, result) {
   const range = `'${tabNames.log}'!A:I`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
@@ -389,12 +324,9 @@ async function updateLogResult(eventId, result) {
 }
 
 // ──────────────────────────────────────────────
-// CẦN KIỂM TRA
+// CAN KIEM TRA
 // ──────────────────────────────────────────────
 
-/**
- * Thêm 1 dòng vào "CẦN KIỂM TRA".
- */
 async function appendReviewRow(row) {
   const values = [[
     row.errorId,
@@ -404,7 +336,7 @@ async function appendReviewRow(row) {
     row.plateAI || '',
     row.reason || '',
     row.suggestion || '',
-    row.reviewStatus || 'Chưa xử lý',
+    row.reviewStatus || 'Chua xu ly',
     row.reviewNote || '',
   ]];
 
@@ -420,178 +352,9 @@ async function appendReviewRow(row) {
 }
 
 // ──────────────────────────────────────────────
-// TIẾN ĐỘ SỬA CHỮA
+// Idempotency check
 // ──────────────────────────────────────────────
 
-/**
- * Thêm 1 dòng cập nhật tiến độ sửa chữa.
- */
-async function appendProgressRow(row) {
-  const values = [[
-    row.progressId,
-    row.vehicleId || '',
-    row.plate,
-    row.timestamp,
-    row.content,
-    row.updatedBy || '',
-  ]];
-
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${tabNames.progress}'!A:F`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
-
-  logger.info('Appended progress row', { progressId: row.progressId, plate: row.plate });
-}
-
-/**
- * Lấy tiến độ sửa chữa cho 1 biển số (mới nhất trước).
- */
-async function getProgressByPlate(plate) {
-  const range = `'${tabNames.progress}'!A:F`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row[2] === plate) {
-      results.push({
-        progressId: row[0],
-        vehicleId: row[1],
-        plate: row[2],
-        timestamp: row[3],
-        content: row[4],
-        updatedBy: row[5],
-      });
-    }
-  }
-
-  return results.reverse(); // Mới nhất trước
-}
-
-// ──────────────────────────────────────────────
-// NHÂN VIÊN
-// ──────────────────────────────────────────────
-
-/**
- * Tìm nhân viên theo Zalo ID.
- */
-async function getStaffByZaloId(zaloId) {
-  const range = `'${tabNames.staff}'!A:E`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i][0] === zaloId && rows[i][3] === 'Hoạt động') {
-      return {
-        zaloId: rows[i][0],
-        name: rows[i][1],
-        role: rows[i][2],
-        status: rows[i][3],
-      };
-    }
-  }
-  return null;
-}
-
-/**
- * Lấy tất cả nhân viên đang hoạt động.
- */
-async function getAllActiveStaff() {
-  const range = `'${tabNames.staff}'!A:E`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i][3] === 'Hoạt động') {
-      results.push({
-        zaloId: rows[i][0],
-        name: rows[i][1],
-        role: rows[i][2],
-      });
-    }
-  }
-  return results;
-}
-
-// ──────────────────────────────────────────────
-// KHÁCH HÀNG
-// ──────────────────────────────────────────────
-
-/**
- * Đăng ký / cập nhật SĐT khách hàng cho 1 biển số.
- */
-async function registerCustomer(plate, phone, name, timestamp) {
-  // Kiểm tra đã tồn tại chưa
-  const existing = await getCustomerByPlate(plate);
-  if (existing) {
-    // Cập nhật SĐT
-    const range = `'${tabNames.customer}'!A:E`;
-    const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-    const rows = res.data.values || [];
-    for (let i = 1; i < rows.length; i++) {
-      if (rows[i][0] === plate) {
-        const rowIndex = i + 1;
-        await sheetsApi.spreadsheets.values.update({
-          spreadsheetId,
-          range: `'${tabNames.customer}'!B${rowIndex}:D${rowIndex}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[phone, name || existing.name, timestamp]] },
-        });
-        logger.info('Updated customer', { plate, phone });
-        return 'updated';
-      }
-    }
-  }
-
-  // Thêm mới
-  const values = [[plate, phone, name || '', timestamp, '']];
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${tabNames.customer}'!A:E`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
-
-  logger.info('Registered customer', { plate, phone });
-  return 'created';
-}
-
-/**
- * Tìm khách hàng theo biển số.
- */
-async function getCustomerByPlate(plate) {
-  const range = `'${tabNames.customer}'!A:E`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i][0] === plate) {
-      return {
-        plate: rows[i][0],
-        phone: rows[i][1],
-        name: rows[i][2],
-        registeredAt: rows[i][3],
-      };
-    }
-  }
-  return null;
-}
-
-// ──────────────────────────────────────────────
-// Idempotency check (dùng NHẬT KÝ GHI NHẬN)
-// ──────────────────────────────────────────────
-
-/**
- * Kiểm tra message_id đã được xử lý chưa (tìm trong cột "Tin nhắn gốc").
- * Lưu message_id trong originalMessage với prefix [MSG_ID:xxx]
- */
 async function isMessageProcessed(messageId) {
   const range = `'${tabNames.log}'!H:H`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
@@ -626,17 +389,10 @@ module.exports = {
   findMainRow,
   updateMainRow,
   getAllInWorkshop,
-  getVehicleHistory,
   getDailySummary,
   appendLogRow,
   updateLogResult,
   appendReviewRow,
-  appendProgressRow,
-  getProgressByPlate,
-  getStaffByZaloId,
-  getAllActiveStaff,
-  registerCustomer,
-  getCustomerByPlate,
   isMessageProcessed,
   COLUMNS,
 };

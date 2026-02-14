@@ -6,15 +6,14 @@ const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets, isMessageProcessed } = require('./sheets');
-const { verifyWebhookSignature, extractWebhookData, sendReply } = require('./zalo');
+const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
 const {
   processVehicleEvent,
   checkTimeAlerts,
-  handleLookup,
-  handleProgressUpdate,
-  handleCustomerRegister,
-  handleDailyReport,
+  handleTonKho,
+  handleGhiChu,
   handleHelp,
+  handleDailyReport,
   sendScheduledDailyReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
@@ -35,16 +34,11 @@ async function bootstrap() {
   // Init OCR
   initOcr(config.ocr.credentials);
 
+  // Init Telegram Bot
+  initTelegram(config.telegram.botToken);
+
   // Start Express
   const app = express();
-
-  // Raw body cho signature verification
-  app.use('/webhook/zalo', express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf.toString('utf-8');
-    },
-  }));
-
   app.use(express.json());
 
   // ──── Routes ────
@@ -54,57 +48,33 @@ async function bootstrap() {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
   });
 
-  // Zalo OA webhook verification (GET)
-  app.get('/webhook/zalo', (req, res) => {
-    // Zalo gửi GET để verify webhook URL
-    const challenge = req.query.challenge;
-    if (challenge) {
-      logger.info('Zalo webhook verification', { challenge });
-      return res.send(challenge);
-    }
-    res.json({ status: 'webhook ready' });
-  });
-
-  // Zalo OA webhook (POST) - Main entry point
-  app.post('/webhook/zalo', async (req, res) => {
+  // Telegram webhook (POST)
+  app.post('/webhook/telegram', async (req, res) => {
     try {
-      // 1. Verify signature
-      const signature = req.headers['x-zevent-signature'] || '';
-      if (config.zalo.secretKey && signature) {
-        const valid = verifyWebhookSignature(req.rawBody, signature, config.zalo.secretKey);
-        if (!valid) {
-          logger.warn('Invalid webhook signature');
-          return res.status(403).json({ error: 'Invalid signature' });
-        }
-      }
+      // Tra 200 ngay de Telegram khong retry
+      res.json({ ok: true });
 
-      // 2. Extract data
-      const data = extractWebhookData(req.body);
-      if (!data) {
-        return res.json({ status: 'ignored' });
-      }
+      const data = extractUpdate(req.body);
+      if (!data) return;
 
-      logger.info('Webhook received', {
+      logger.info('Telegram message received', {
         messageId: data.messageId,
-        senderId: data.senderId,
+        chatId: data.chatId,
         text: data.text,
-        hasImage: !!data.imageUrl,
+        hasImage: !!data.imageFileId,
+        sender: data.senderName,
       });
 
-      // 3. Idempotency: check duplicate message
-      if (data.messageId) {
-        const processed = await isMessageProcessed(data.messageId);
-        if (processed) {
-          logger.info('Duplicate message, skipping', { messageId: data.messageId });
-          return res.json({ status: 'duplicate' });
-        }
+      // Idempotency check
+      const msgKey = `${data.chatId}_${data.messageId}`;
+      const processed = await isMessageProcessed(msgKey);
+      if (processed) {
+        logger.info('Duplicate message, skipping', { messageId: msgKey });
+        return;
       }
 
-      // 4. Respond 200 immediately (Zalo timeout = 5s)
-      res.json({ status: 'received' });
-
-      // 5. Process async (sau khi đã trả 200)
-      processWebhookAsync(data).catch(err => {
+      // Process async
+      processMessageAsync(data).catch(err => {
         logger.error('Async processing failed', { error: err.message, stack: err.stack });
       });
 
@@ -116,7 +86,7 @@ async function bootstrap() {
     }
   });
 
-  // Trigger alert check manually
+  // Admin: trigger alert check
   app.post('/admin/check-alerts', async (_req, res) => {
     try {
       const updated = await checkTimeAlerts(config);
@@ -127,10 +97,10 @@ async function bootstrap() {
     }
   });
 
-  // Trigger daily report manually
+  // Admin: trigger daily report
   app.post('/admin/daily-report', async (_req, res) => {
     try {
-      const report = await handleDailyReport(null, config);
+      const report = await handleDailyReport(config);
       res.json({ status: 'ok', report: report.replyMessage });
     } catch (err) {
       logger.error('Daily report failed', { error: err.message });
@@ -140,16 +110,28 @@ async function bootstrap() {
 
   // Start server
   const port = config.port;
-  app.listen(port, () => {
+  app.listen(port, async () => {
     logger.info(`Server started on port ${port}`);
-    logger.info('Xưởng VinFast Phúc Lợi - Hệ thống theo dõi xe vào/ra');
-    logger.info('Webhook URL: POST /webhook/zalo');
-    if (config.manager.zaloIds.length > 0) {
-      logger.info(`Manager Zalo IDs configured: ${config.manager.zaloIds.length}`);
+    logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Telegram Bot)');
+    logger.info('Webhook URL: POST /webhook/telegram');
+
+    // Tu dong set webhook neu co TELEGRAM_WEBHOOK_URL
+    if (config.telegram.webhookUrl) {
+      try {
+        const webhookFullUrl = `${config.telegram.webhookUrl}/webhook/telegram`;
+        await setWebhook(webhookFullUrl);
+        logger.info(`Telegram webhook set: ${webhookFullUrl}`);
+      } catch (err) {
+        logger.error('Failed to set Telegram webhook', { error: err.message });
+      }
+    }
+
+    if (config.manager.chatIds.length > 0) {
+      logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
     }
   });
 
-  // Chạy check alerts mỗi 30 phút
+  // Check alerts moi 30 phut
   setInterval(async () => {
     try {
       const updated = await checkTimeAlerts(config);
@@ -161,67 +143,65 @@ async function bootstrap() {
     }
   }, 30 * 60 * 1000);
 
-  // Báo cáo tự động cuối ngày
+  // Bao cao tu dong cuoi ngay
   scheduleDailyReport();
 }
 
 // ──────────────────────────────────────────────
-// Async webhook processing
+// Async message processing
 // ──────────────────────────────────────────────
 
-async function processWebhookAsync(data) {
-  const { messageId, senderId, text, imageUrl } = data;
+async function processMessageAsync(data) {
+  const { messageId, chatId, senderId, senderName, text, imageFileId } = data;
 
-  // Parse tin nhắn trước để xác định action
   const parsed = parseMessage(text);
 
-  // ═══════════ TEXT-ONLY COMMANDS (không cần ảnh) ═══════════
+  // ═══ TEXT-ONLY COMMANDS ═══
   if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
     let result;
 
     switch (parsed.action) {
-      case 'TRACUU':
-        result = await handleLookup(parsed.params, senderId, config);
+      case 'TONKHO':
+        result = await handleTonKho(config);
         break;
-      case 'CAPNHAT':
-        result = await handleProgressUpdate(parsed.params, senderId, config);
+      case 'GHICHU':
+        result = await handleGhiChu(parsed.params, config);
         break;
-      case 'DANGKY':
-        result = await handleCustomerRegister(parsed.params, senderId, config);
-        break;
-      case 'BAOCAO':
-        result = await handleDailyReport(senderId, config);
-        break;
-      case 'HUONGDAN':
+      case 'HELP':
         result = handleHelp();
         break;
     }
 
     if (result && result.replyMessage) {
-      await sendReply(senderId, result.replyMessage, config.zalo.accessToken);
+      await sendMessage(chatId, result.replyMessage);
     }
     return;
   }
 
-  // ═══════════ IMAGE-BASED COMMANDS (VAO/RA - cần ảnh) ═══════════
+  // ═══ IMAGE-BASED COMMANDS (VAO/RA) ═══
 
-  // Kiểm tra: phải có ảnh
-  if (!imageUrl) {
-    // Gửi hướng dẫn
-    await sendReply(
-      senderId,
-      '📋 Để ghi nhận xe, vui lòng gửi:\n' +
-      '1. Ảnh chụp biển số xe\n' +
-      '2. Kèm nội dung: VAO hoặc RA\n\n' +
-      'Ví dụ: Gửi ảnh + text "VAO" hoặc "RA"\n' +
-      'Mở rộng: "VAO | xe tải" hoặc "RA | xe con"\n\n' +
-      'Gõ HUONGDAN để xem tất cả lệnh.',
-      config.zalo.accessToken
+  if (!imageFileId) {
+    await sendMessage(
+      chatId,
+      'De ghi nhan xe, gui:\n' +
+      '1. Anh chup bien so xe\n' +
+      '2. Kem noi dung: VAO hoac RA\n\n' +
+      'Go HELP de xem tat ca lenh.'
     );
     return;
   }
 
-  // OCR biển số
+  // Tai anh tu Telegram
+  let imageUrl;
+  try {
+    imageUrl = await getFileUrl(imageFileId);
+  } catch (err) {
+    logger.error('Failed to get Telegram file URL', { error: err.message });
+    await sendMessage(chatId, 'Khong tai duoc anh. Vui long gui lai.');
+    return;
+  }
+
+  // OCR bien so
   let ocrResult;
   try {
     ocrResult = await recognizePlate(imageUrl);
@@ -230,21 +210,23 @@ async function processWebhookAsync(data) {
     ocrResult = { plateText: '', confidence: 0, rawTexts: [] };
   }
 
-  // Xử lý nghiệp vụ
+  // Xu ly nghiep vu
+  const msgKey = `${chatId}_${messageId}`;
   const result = await processVehicleEvent({
-    messageId,
+    messageId: msgKey,
     senderId,
+    senderName,
     text,
     imageUrl,
     ocrResult,
   }, config);
 
-  // Trả lời Zalo
+  // Tra loi
   if (result.replyMessage) {
-    await sendReply(senderId, result.replyMessage, config.zalo.accessToken);
+    await sendMessage(chatId, result.replyMessage);
   }
 
-  // Sau mỗi event, check alerts
+  // Check alerts sau moi event
   await checkTimeAlerts(config).catch(err => {
     logger.error('Post-event alert check failed', { error: err.message });
   });
@@ -256,14 +238,13 @@ async function processWebhookAsync(data) {
 
 function scheduleDailyReport() {
   const reportHour = config.manager.dailyReportHour;
-  const managerIds = config.manager.zaloIds;
+  const chatIds = config.manager.chatIds;
 
-  if (managerIds.length === 0) {
-    logger.info('No manager Zalo IDs configured - daily report disabled');
+  if (chatIds.length === 0) {
+    logger.info('No manager chat IDs configured - daily report disabled');
     return;
   }
 
-  // Check mỗi phút xem đã đến giờ gửi báo cáo chưa
   let lastReportDate = '';
   setInterval(async () => {
     const { DateTime } = require('luxon');
@@ -271,7 +252,6 @@ function scheduleDailyReport() {
     const todayStr = now.toFormat('yyyy-MM-dd');
     const currentHour = now.hour;
 
-    // Gửi báo cáo 1 lần/ngày vào đúng giờ cấu hình
     if (currentHour === reportHour && lastReportDate !== todayStr) {
       lastReportDate = todayStr;
       try {
@@ -280,7 +260,7 @@ function scheduleDailyReport() {
         logger.error('Scheduled daily report failed', { error: err.message });
       }
     }
-  }, 60 * 1000); // Check mỗi 60 giây
+  }, 60 * 1000);
 
   logger.info(`Daily report scheduled at ${reportHour}:00`);
 }
