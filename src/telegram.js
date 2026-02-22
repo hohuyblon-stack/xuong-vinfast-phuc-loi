@@ -8,7 +8,7 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 let botToken = '';
 
 /**
- * Khoi tao Telegram Bot token.
+ * Khởi tạo Telegram Bot token.
  */
 function initTelegram(token) {
   botToken = token;
@@ -16,7 +16,7 @@ function initTelegram(token) {
 }
 
 /**
- * Trich xuat thong tin tu Telegram webhook update.
+ * Trích xuất thông tin từ Telegram webhook update.
  * @param {object} update - Telegram update object
  * @returns {object|null} - { messageId, chatId, senderId, senderName, text, imageFileId }
  */
@@ -34,13 +34,13 @@ function extractUpdate(update) {
       ? [message.from.first_name, message.from.last_name].filter(Boolean).join(' ')
       : '';
 
-    // Text co the la text hoac caption (khi gui anh kem text)
+    // Text có thể là text hoặc caption (khi gửi ảnh kèm text)
     const text = (message.text || message.caption || '').trim();
 
-    // Lay file_id cua anh co resolution cao nhat
+    // Lấy file_id của ảnh có resolution cao nhất
     let imageFileId = '';
     if (message.photo && message.photo.length > 0) {
-      // Telegram gui nhieu kich thuoc, lay cai cuoi cung (lon nhat)
+      // Telegram gửi nhiều kích thước, lấy cái cuối cùng (lớn nhất)
       imageFileId = message.photo[message.photo.length - 1].file_id;
     }
 
@@ -59,7 +59,7 @@ function extractUpdate(update) {
 }
 
 /**
- * Lay URL tai anh tu Telegram (qua getFile API).
+ * Lấy URL tải ảnh từ Telegram (qua getFile API).
  * @param {string} fileId - Telegram file_id
  * @returns {string} - Download URL
  */
@@ -73,9 +73,9 @@ async function getFileUrl(fileId) {
 }
 
 /**
- * Gui tin nhan text cho 1 chat.
+ * Gửi tin nhắn text cho 1 chat.
  * @param {string} chatId - Telegram chat ID
- * @param {string} message - Noi dung tin nhan
+ * @param {string} message - Nội dung tin nhắn
  */
 async function sendMessage(chatId, message) {
   try {
@@ -92,7 +92,7 @@ async function sendMessage(chatId, message) {
 }
 
 /**
- * Dat webhook URL cho Telegram Bot.
+ * Đặt webhook URL cho Telegram Bot.
  * @param {string} url - Webhook URL (HTTPS)
  */
 async function setWebhook(url) {
