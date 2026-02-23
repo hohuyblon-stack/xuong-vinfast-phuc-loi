@@ -9,19 +9,27 @@
     "test": "node --test 'test/**/*.test.js'",
     "check-alerts": "node src/scripts/check-alerts.js"
   },
-  "keywords": ["vinfast", "zalo", "ocr", "license-plate", "google-sheets"],
+  "keywords": [
+    "vinfast",
+    "zalo",
+    "ocr",
+    "license-plate",
+    "google-sheets"
+  ],
   "license": "UNLICENSED",
   "private": true,
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@google-cloud/vision": "^4.3.2",
     "axios": "^1.7.9",
+    "better-sqlite3": "^12.6.2",
     "dotenv": "^16.4.7",
     "express": "^4.21.1",
-    "googleapis": "^144.0.0",
     "luxon": "^3.5.0",
+    "node-cron": "^4.2.1",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0",
     "winston": "^3.17.0"
   },
   "devDependencies": {

@@ -18,7 +18,7 @@ function optionalEnv(key, fallback) {
 
 function loadConfig() {
   return {
-    port: parseInt(optionalEnv('PORT', '3000'), 10),
+    port:    parseInt(optionalEnv('PORT', '3000'), 10),
     nodeEnv: optionalEnv('NODE_ENV', 'development'),
 
     // Zalo OA
@@ -27,30 +27,21 @@ function loadConfig() {
       oaSecretKey: optionalEnv('ZALO_OA_SECRET_KEY', ''),
     },
 
-    // Google Sheets
-    sheets: {
-      spreadsheetId: requireEnv('GOOGLE_SHEET_ID'),
-      credentials: JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
-      tabNames: {
-        main: 'DANH SACH CHINH',
-        log: 'NHAT KY',
-        review: 'CAN KIEM TRA',
-      },
+    // SQLite database (thay the Google Sheets - mien phi, khong rate limit)
+    db: {
+      dbPath: optionalEnv('DB_PATH', './data/xuong.db'),
     },
 
-    // OCR (Google Cloud Vision)
+    // OCR (Tesseract local - mien phi, khong can credentials)
     ocr: {
-      credentials: process.env.GOOGLE_VISION_CREDENTIALS_JSON
-        ? JSON.parse(process.env.GOOGLE_VISION_CREDENTIALS_JSON)
-        : JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
-      confidenceHigh: parseFloat(optionalEnv('OCR_CONFIDENCE_HIGH', '0.8')),
+      confidenceHigh:   parseFloat(optionalEnv('OCR_CONFIDENCE_HIGH', '0.8')),
       confidenceMedium: parseFloat(optionalEnv('OCR_CONFIDENCE_MEDIUM', '0.5')),
     },
 
     // Canh bao
     alerts: {
       warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '24')),
-      urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '48')),
+      urgentHours:  parseFloat(optionalEnv('ALERT_HOURS_URGENT', '48')),
     },
 
     // Quan ly

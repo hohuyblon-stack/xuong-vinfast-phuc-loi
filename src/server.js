@@ -3,9 +3,10 @@
 require('dotenv/config');
 
 const express = require('express');
+const cron = require('node-cron');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
-const { initSheets, isMessageProcessed } = require('./sheets');
+const { initSheets, isMessageProcessed } = require('./db');
 const { initZalo, extractUpdate, sendMessage } = require('./zalo');
 const {
   processVehicleEvent,
@@ -28,11 +29,11 @@ let config;
 async function bootstrap() {
   config = loadConfig();
 
-  // Init Google Sheets
-  await initSheets(config.sheets);
+  // Init SQLite (thay Google Sheets)
+  await initSheets(config.db);
 
-  // Init OCR
-  initOcr(config.ocr.credentials);
+  // Init Tesseract OCR (local, async)
+  await initOcr();
 
   // Init Zalo OA
   initZalo(config.zalo.accessToken);
@@ -43,12 +44,10 @@ async function bootstrap() {
 
   // ──── Routes ────
 
-  // Health check
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
   });
 
-  // Zalo webhook (POST)
   app.post('/webhook/zalo', async (req, res) => {
     try {
       // Tra 200 ngay de Zalo khong retry
@@ -59,13 +58,13 @@ async function bootstrap() {
 
       logger.info('Zalo message received', {
         messageId: data.messageId,
-        chatId: data.chatId,
-        text: data.text,
-        hasImage: !!data.imageUrl,
-        sender: data.senderName,
+        chatId:    data.chatId,
+        text:      data.text,
+        hasImage:  !!data.imageUrl,
+        sender:    data.senderName,
       });
 
-      // Idempotency check
+      // Idempotency check (in-memory + DB fallback)
       const msgKey = `${data.chatId}_${data.messageId}`;
       const processed = await isMessageProcessed(msgKey);
       if (processed) {
@@ -73,7 +72,6 @@ async function bootstrap() {
         return;
       }
 
-      // Process async
       processMessageAsync(data).catch(err => {
         logger.error('Async processing failed', { error: err.message, stack: err.stack });
       });
@@ -86,12 +84,8 @@ async function bootstrap() {
     }
   });
 
-  // Zalo webhook verification (GET) - Zalo gọi khi setup webhook
-  app.get('/webhook/zalo', (req, res) => {
-    res.status(200).send('OK');
-  });
+  app.get('/webhook/zalo', (_req, res) => res.status(200).send('OK'));
 
-  // Admin: trigger alert check
   app.post('/admin/check-alerts', async (_req, res) => {
     try {
       const updated = await checkTimeAlerts(config);
@@ -102,7 +96,6 @@ async function bootstrap() {
     }
   });
 
-  // Admin: trigger daily report
   app.post('/admin/daily-report', async (_req, res) => {
     try {
       const report = await handleDailyReport(config);
@@ -113,20 +106,29 @@ async function bootstrap() {
     }
   });
 
-  // Start server
   const port = config.port;
-  app.listen(port, async () => {
+  app.listen(port, () => {
     logger.info(`Server started on port ${port}`);
     logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Zalo OA)');
-    logger.info('Webhook URL: POST /webhook/zalo');
 
     if (config.manager.chatIds.length > 0) {
       logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
     }
   });
 
-  // Check alerts moi 30 phut
-  setInterval(async () => {
+  // ──── Cron jobs (thay setInterval) ────
+  scheduleJobs();
+}
+
+// ──────────────────────────────────────────────
+// Cron scheduling
+// ──────────────────────────────────────────────
+
+function scheduleJobs() {
+  const tz = config.timezone;
+
+  // Kiem tra canh bao moi 30 phut
+  cron.schedule('*/30 * * * *', async () => {
     try {
       const updated = await checkTimeAlerts(config);
       if (updated > 0) {
@@ -135,10 +137,25 @@ async function bootstrap() {
     } catch (err) {
       logger.error('Periodic alert check failed', { error: err.message });
     }
-  }, 30 * 60 * 1000);
+  }, { timezone: tz });
 
-  // Bao cao tu dong cuoi ngay
-  scheduleDailyReport();
+  // Bao cao cuoi ngay theo gio cau hinh
+  const reportHour = config.manager.dailyReportHour;
+
+  if (config.manager.chatIds.length === 0) {
+    logger.info('No manager chat IDs configured - daily report disabled');
+    return;
+  }
+
+  cron.schedule(`0 ${reportHour} * * *`, async () => {
+    try {
+      await sendScheduledDailyReport(config);
+    } catch (err) {
+      logger.error('Scheduled daily report failed', { error: err.message });
+    }
+  }, { timezone: tz });
+
+  logger.info(`Cron jobs scheduled (tz: ${tz}): alerts every 30min, daily report at ${reportHour}:00`);
 }
 
 // ──────────────────────────────────────────────
@@ -205,7 +222,6 @@ async function processMessageAsync(data) {
     ocrResult,
   }, config);
 
-  // Tra loi
   if (result.replyMessage) {
     await sendMessage(chatId, result.replyMessage);
   }
@@ -214,39 +230,6 @@ async function processMessageAsync(data) {
   await checkTimeAlerts(config).catch(err => {
     logger.error('Post-event alert check failed', { error: err.message });
   });
-}
-
-// ──────────────────────────────────────────────
-// Scheduled daily report
-// ──────────────────────────────────────────────
-
-function scheduleDailyReport() {
-  const reportHour = config.manager.dailyReportHour;
-  const chatIds = config.manager.chatIds;
-
-  if (chatIds.length === 0) {
-    logger.info('No manager chat IDs configured - daily report disabled');
-    return;
-  }
-
-  let lastReportDate = '';
-  setInterval(async () => {
-    const { DateTime } = require('luxon');
-    const now = DateTime.now().setZone(config.timezone);
-    const todayStr = now.toFormat('yyyy-MM-dd');
-    const currentHour = now.hour;
-
-    if (currentHour === reportHour && lastReportDate !== todayStr) {
-      lastReportDate = todayStr;
-      try {
-        await sendScheduledDailyReport(config);
-      } catch (err) {
-        logger.error('Scheduled daily report failed', { error: err.message });
-      }
-    }
-  }, 60 * 1000);
-
-  logger.info(`Daily report scheduled at ${reportHour}:00`);
 }
 
 // ──────────────────────────────────────────────

@@ -1,24 +1,38 @@
 'use strict';
 
-const vision = require('@google-cloud/vision');
+/**
+ * OCR bien so xe Viet Nam bang Tesseract.js (local, mien phi).
+ * Su dung Sharp de tien xu ly anh truoc khi OCR de tang do chinh xac.
+ */
+
+const { createWorker } = require('tesseract.js');
+const sharp = require('sharp');
 const axios = require('axios');
 const { normalizePlate, isValidVietnamPlate } = require('./utils');
 const logger = require('./logger');
 
-let visionClient = null;
+let worker = null;
 
 /**
- * Khởi tạo Google Cloud Vision client.
+ * Khoi tao Tesseract worker.
+ * Goi 1 lan khi server khoi dong.
  */
-function initOcr(credentials) {
-  visionClient = new vision.ImageAnnotatorClient({
-    credentials,
+async function initOcr() {
+  worker = await createWorker('eng', 1, {
+    logger: () => {}, // Tat log verbose cua Tesseract
   });
-  logger.info('Google Cloud Vision client initialized');
+
+  // Gioi han bo chu de tang do chinh xac voi bien so
+  await worker.setParameters({
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+    preserve_interword_spaces: '0',
+  });
+
+  logger.info('Tesseract OCR initialized (local, no API cost)');
 }
 
 /**
- * Tải ảnh từ URL về dạng buffer.
+ * Tai anh tu URL ve dang buffer.
  */
 async function downloadImage(imageUrl) {
   const response = await axios.get(imageUrl, {
@@ -29,97 +43,90 @@ async function downloadImage(imageUrl) {
 }
 
 /**
- * Đọc biển số từ ảnh.
- * @param {string} imageUrl - URL ảnh (từ Zalo)
+ * Tien xu ly anh de tang do chinh xac OCR:
+ * - Scale up de bien so ro hon
+ * - Chuyen grayscale
+ * - Normalize contrast
+ * - Sharpen canh vien
+ */
+async function preprocessImage(buffer) {
+  return sharp(buffer)
+    .resize({ width: 1200, withoutEnlargement: false })
+    .grayscale()
+    .normalize()
+    .sharpen({ sigma: 1.5 })
+    .toBuffer();
+}
+
+/**
+ * Doc bien so xe tu URL anh.
+ * @param {string} imageUrl
  * @returns {{ plateText: string, confidence: number, rawTexts: string[] }}
  */
 async function recognizePlate(imageUrl) {
-  if (!visionClient) {
-    throw new Error('OCR client not initialized. Call initOcr() first.');
+  if (!worker) {
+    throw new Error('OCR not initialized. Call initOcr() first.');
   }
 
-  const result = {
-    plateText: '',
-    confidence: 0,
-    rawTexts: [],
-  };
+  const result = { plateText: '', confidence: 0, rawTexts: [] };
 
   try {
-    // Tải ảnh
-    const imageBuffer = await downloadImage(imageUrl);
+    const rawBuffer = await downloadImage(imageUrl);
+    const processed = await preprocessImage(rawBuffer);
 
-    // Gọi Google Vision - text detection
-    const [response] = await visionClient.textDetection({
-      image: { content: imageBuffer.toString('base64') },
-    });
+    const { data } = await worker.recognize(processed);
+    const fullText = (data.text || '').trim();
+    const tesseractConf = (data.confidence || 0) / 100; // 0-100 -> 0-1
 
-    if (response.error) {
-      logger.error('Vision API error', { error: response.error });
-      return result;
-    }
+    result.rawTexts = [fullText];
 
-    const annotations = response.textAnnotations;
-    if (!annotations || annotations.length === 0) {
-      logger.warn('No text detected in image');
-      return result;
-    }
-
-    // annotations[0] = full text, annotations[1..n] = từng word/block
-    const fullText = annotations[0].description || '';
-    result.rawTexts = annotations.map(a => a.description);
-
-    // Tách candidates từ full text (mỗi dòng)
     const lines = fullText
       .split(/[\n\r]+/)
       .map(l => l.trim())
       .filter(Boolean);
 
-    // Tìm candidate khớp pattern biển số Việt Nam
     const candidates = [];
+
+    // Tim candidate tren tung dong
     for (const line of lines) {
       const normalized = normalizePlate(line);
       if (isValidVietnamPlate(normalized)) {
         candidates.push({
-          raw: line,
           normalized,
-          // Confidence heuristic: dựa vào số block annotation match
-          score: calcPlateScore(normalized, annotations),
+          score: calcPlateScore(normalized, tesseractConf),
         });
       }
     }
 
-    // Thử ghép 2 dòng liên tiếp (biển số 2 dòng)
+    // Thu ghep 2 dong lien tiep (bien so 2 dong)
     for (let i = 0; i < lines.length - 1; i++) {
       const merged = lines[i] + lines[i + 1];
       const normalized = normalizePlate(merged);
       if (isValidVietnamPlate(normalized)) {
         candidates.push({
-          raw: `${lines[i]} ${lines[i + 1]}`,
           normalized,
-          score: calcPlateScore(normalized, annotations),
+          score: calcPlateScore(normalized, tesseractConf) - 0.05,
         });
       }
     }
 
     if (candidates.length > 0) {
-      // Chọn candidate có score cao nhất
       candidates.sort((a, b) => b.score - a.score);
-      const best = candidates[0];
-      result.plateText = best.normalized;
-      result.confidence = best.score;
+      result.plateText = candidates[0].normalized;
+      result.confidence = Math.min(0.99, candidates[0].score);
     } else {
-      // Fallback: lấy dòng đầu tiên có chứa số
+      // Fallback: dong dau tien co so
       const fallback = lines.find(l => /\d{2,}/.test(l));
       if (fallback) {
         result.plateText = normalizePlate(fallback);
-        result.confidence = 0.3; // Thấp vì không match pattern
+        result.confidence = 0.3;
       }
     }
 
     logger.info('OCR result', {
       plateText: result.plateText,
       confidence: result.confidence,
-      candidateCount: candidates.length,
+      tesseractConf: Math.round(tesseractConf * 100),
     });
   } catch (err) {
     logger.error('OCR processing failed', { error: err.message, imageUrl });
@@ -129,34 +136,21 @@ async function recognizePlate(imageUrl) {
 }
 
 /**
- * Tính điểm confidence cho 1 candidate biển số.
- * Dựa vào: vision API confidence, format match, character consistency.
+ * Tinh diem confidence cho 1 candidate bien so.
  */
-function calcPlateScore(normalized, annotations) {
-  let score = 0.5; // Base
+function calcPlateScore(normalized, tesseractConf) {
+  let score = 0.4; // Base
 
-  // Bonus: khớp regex Việt Nam chặt
+  // Bonus neu khop format bien so Viet Nam chat
   if (/^\d{2}[A-Z]\d?-\d{4,5}$/.test(normalized)) {
-    score += 0.3;
+    score += 0.35;
   } else if (/^\d{3}[A-Z]\d?-\d{4,5}$/.test(normalized)) {
-    score += 0.25;
+    score += 0.3;
   }
 
-  // Bonus: Vision API block confidence (nếu có)
-  const blockAnnotations = annotations.slice(1);
-  const plateChars = normalized.replace('-', '');
-  let matchedBlocks = 0;
-  for (const block of blockAnnotations) {
-    const blockText = (block.description || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    if (plateChars.includes(blockText) && blockText.length > 0) {
-      matchedBlocks++;
-      if (block.confidence) {
-        score += block.confidence * 0.05;
-      }
-    }
-  }
+  // Cong them confidence cua Tesseract (0-1, trong so 0.25)
+  score += tesseractConf * 0.25;
 
-  // Cap at 0.99
   return Math.min(0.99, Math.max(0.1, score));
 }
 

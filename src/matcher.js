@@ -407,7 +407,7 @@ async function sendScheduledDailyReport(config) {
 // ──────────────────────────────────────────────
 
 async function notifyManagers(message, config) {
-  const { sendMessage } = require('./telegram');
+  const { sendMessage } = require('./zalo');
   const chatIds = config.manager.chatIds;
   if (chatIds.length === 0) return;
 
