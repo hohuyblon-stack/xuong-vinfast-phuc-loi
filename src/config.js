@@ -21,10 +21,10 @@ function loadConfig() {
     port: parseInt(optionalEnv('PORT', '3000'), 10),
     nodeEnv: optionalEnv('NODE_ENV', 'development'),
 
-    // Telegram Bot
-    telegram: {
-      botToken: requireEnv('TELEGRAM_BOT_TOKEN'),
-      webhookUrl: optionalEnv('TELEGRAM_WEBHOOK_URL', ''),
+    // Zalo OA
+    zalo: {
+      accessToken: requireEnv('ZALO_ACCESS_TOKEN'),
+      oaSecretKey: optionalEnv('ZALO_OA_SECRET_KEY', ''),
     },
 
     // Google Sheets

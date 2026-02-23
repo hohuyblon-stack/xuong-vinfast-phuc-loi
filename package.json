@@ -1,7 +1,7 @@
 {
   "name": "xuong-vinfast-phuc-loi",
   "version": "2.0.0",
-  "description": "He thong theo doi xe vao/ra xuong VinFast Phuc Loi - Telegram Bot + OCR bien so + Google Sheets",
+  "description": "He thong theo doi xe vao/ra xuong VinFast Phuc Loi - Zalo OA + OCR bien so + Google Sheets",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -9,7 +9,7 @@
     "test": "node --test 'test/**/*.test.js'",
     "check-alerts": "node src/scripts/check-alerts.js"
   },
-  "keywords": ["vinfast", "telegram", "ocr", "license-plate", "google-sheets"],
+  "keywords": ["vinfast", "zalo", "ocr", "license-plate", "google-sheets"],
   "license": "UNLICENSED",
   "private": true,
   "engines": {
