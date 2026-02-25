@@ -21,10 +21,9 @@ function loadConfig() {
     port:    parseInt(optionalEnv('PORT', '3000'), 10),
     nodeEnv: optionalEnv('NODE_ENV', 'development'),
 
-    // Zalo OA
-    zalo: {
-      accessToken: requireEnv('ZALO_ACCESS_TOKEN'),
-      oaSecretKey: optionalEnv('ZALO_OA_SECRET_KEY', ''),
+    // Telegram Bot
+    telegram: {
+      botToken: requireEnv('TELEGRAM_BOT_TOKEN'),
     },
 
     // SQLite database (thay the Google Sheets - mien phi, khong rate limit)

@@ -7,7 +7,7 @@ const cron = require('node-cron');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets, isMessageProcessed } = require('./db');
-const { initZalo, extractUpdate, sendMessage } = require('./zalo');
+const { initTelegram, extractUpdate, sendMessage } = require('./telegram');
 const {
   processVehicleEvent,
   checkTimeAlerts,
@@ -29,16 +29,15 @@ let config;
 async function bootstrap() {
   config = loadConfig();
 
-  // Init SQLite (thay Google Sheets)
+  // Init SQLite
   await initSheets(config.db);
 
   // Init Tesseract OCR (local, async)
   await initOcr();
 
-  // Init Zalo OA
-  initZalo(config.zalo.accessToken);
+  // Init Telegram Bot
+  initTelegram(config.telegram.botToken);
 
-  // Start Express
   const app = express();
   app.use(express.json());
 
@@ -48,15 +47,18 @@ async function bootstrap() {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
   });
 
-  app.post('/webhook/zalo', async (req, res) => {
+  // Telegram webhook (POST)
+  // Cach set webhook: GET https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://your-domain/webhook/telegram
+  app.post('/webhook/telegram', async (req, res) => {
     try {
-      // Tra 200 ngay de Zalo khong retry
+      // Tra 200 ngay de Telegram khong retry
       res.json({ ok: true });
 
-      const data = extractUpdate(req.body);
+      // extractUpdate la async vi can goi getFile de lay URL anh
+      const data = await extractUpdate(req.body);
       if (!data) return;
 
-      logger.info('Zalo message received', {
+      logger.info('Telegram message received', {
         messageId: data.messageId,
         chatId:    data.chatId,
         text:      data.text,
@@ -64,7 +66,7 @@ async function bootstrap() {
         sender:    data.senderName,
       });
 
-      // Idempotency check (in-memory + DB fallback)
+      // Idempotency check
       const msgKey = `${data.chatId}_${data.messageId}`;
       const processed = await isMessageProcessed(msgKey);
       if (processed) {
@@ -83,8 +85,6 @@ async function bootstrap() {
       }
     }
   });
-
-  app.get('/webhook/zalo', (_req, res) => res.status(200).send('OK'));
 
   app.post('/admin/check-alerts', async (_req, res) => {
     try {
@@ -109,14 +109,15 @@ async function bootstrap() {
   const port = config.port;
   app.listen(port, () => {
     logger.info(`Server started on port ${port}`);
-    logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Zalo OA)');
+    logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Telegram)');
+    logger.info(`Webhook URL: POST /webhook/telegram`);
 
     if (config.manager.chatIds.length > 0) {
       logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
     }
   });
 
-  // ──── Cron jobs (thay setInterval) ────
+  // ──── Cron jobs ────
   scheduleJobs();
 }
 
@@ -139,11 +140,11 @@ function scheduleJobs() {
     }
   }, { timezone: tz });
 
-  // Bao cao cuoi ngay theo gio cau hinh
+  // Bao cao cuoi ngay
   const reportHour = config.manager.dailyReportHour;
 
   if (config.manager.chatIds.length === 0) {
-    logger.info('No manager chat IDs configured - daily report disabled');
+    logger.info('No manager chat IDs - daily report disabled');
     return;
   }
 
@@ -155,7 +156,7 @@ function scheduleJobs() {
     }
   }, { timezone: tz });
 
-  logger.info(`Cron jobs scheduled (tz: ${tz}): alerts every 30min, daily report at ${reportHour}:00`);
+  logger.info(`Cron: alerts every 30min, daily report at ${reportHour}:00 (${tz})`);
 }
 
 // ──────────────────────────────────────────────
