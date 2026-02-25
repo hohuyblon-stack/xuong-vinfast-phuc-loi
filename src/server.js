@@ -6,7 +6,7 @@ const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets, isMessageProcessed } = require('./sheets');
-const { initZalo, extractUpdate, sendMessage } = require('./zalo');
+const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
 const {
   processVehicleEvent,
   checkTimeAlerts,
@@ -34,8 +34,8 @@ async function bootstrap() {
   // Init OCR
   initOcr(config.ocr.credentials);
 
-  // Init Zalo OA
-  initZalo(config.zalo.accessToken);
+  // Init Telegram Bot
+  initTelegram(config.telegram.botToken);
 
   // Start Express
   const app = express();
@@ -48,20 +48,20 @@ async function bootstrap() {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
   });
 
-  // Zalo webhook (POST)
-  app.post('/webhook/zalo', async (req, res) => {
+  // Telegram webhook (POST)
+  app.post('/webhook/telegram', async (req, res) => {
     try {
-      // Tra 200 ngay de Zalo khong retry
+      // Tra 200 ngay de Telegram khong retry
       res.json({ ok: true });
 
       const data = extractUpdate(req.body);
       if (!data) return;
 
-      logger.info('Zalo message received', {
+      logger.info('Telegram message received', {
         messageId: data.messageId,
         chatId: data.chatId,
         text: data.text,
-        hasImage: !!data.imageUrl,
+        hasImage: !!data.imageFileId,
         sender: data.senderName,
       });
 
@@ -84,11 +84,6 @@ async function bootstrap() {
         res.status(500).json({ error: 'Internal error' });
       }
     }
-  });
-
-  // Zalo webhook verification (GET) - Zalo gọi khi setup webhook
-  app.get('/webhook/zalo', (req, res) => {
-    res.status(200).send('OK');
   });
 
   // Admin: trigger alert check
@@ -117,8 +112,19 @@ async function bootstrap() {
   const port = config.port;
   app.listen(port, async () => {
     logger.info(`Server started on port ${port}`);
-    logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Zalo OA)');
-    logger.info('Webhook URL: POST /webhook/zalo');
+    logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Telegram Bot)');
+    logger.info('Webhook URL: POST /webhook/telegram');
+
+    // Tu dong set webhook neu co TELEGRAM_WEBHOOK_URL
+    if (config.telegram.webhookUrl) {
+      try {
+        const webhookFullUrl = `${config.telegram.webhookUrl}/webhook/telegram`;
+        await setWebhook(webhookFullUrl);
+        logger.info(`Telegram webhook set: ${webhookFullUrl}`);
+      } catch (err) {
+        logger.error('Failed to set Telegram webhook', { error: err.message });
+      }
+    }
 
     if (config.manager.chatIds.length > 0) {
       logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
@@ -146,7 +152,7 @@ async function bootstrap() {
 // ──────────────────────────────────────────────
 
 async function processMessageAsync(data) {
-  const { messageId, chatId, senderId, senderName, text, imageUrl } = data;
+  const { messageId, chatId, senderId, senderName, text, imageFileId } = data;
 
   const parsed = parseMessage(text);
 
@@ -174,7 +180,7 @@ async function processMessageAsync(data) {
 
   // ═══ IMAGE-BASED COMMANDS (VAO/RA) ═══
 
-  if (!imageUrl) {
+  if (!imageFileId) {
     await sendMessage(
       chatId,
       'De ghi nhan xe, gui:\n' +
@@ -182,6 +188,16 @@ async function processMessageAsync(data) {
       '2. Kem noi dung: VAO hoac RA\n\n' +
       'Go HELP de xem tat ca lenh.'
     );
+    return;
+  }
+
+  // Tai anh tu Telegram
+  let imageUrl;
+  try {
+    imageUrl = await getFileUrl(imageFileId);
+  } catch (err) {
+    logger.error('Failed to get Telegram file URL', { error: err.message });
+    await sendMessage(chatId, 'Khong tai duoc anh. Vui long gui lai.');
     return;
   }
 
