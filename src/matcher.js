@@ -6,6 +6,7 @@ const logger = require('./logger');
 
 /**
  * Xu ly 1 su kien xe vao/ra.
+ * Tu dong xac dinh VAO hay RA dua vao trang thai bien so trong Sheets.
  */
 async function processVehicleEvent(event, config) {
   const tz = config.timezone;
@@ -13,22 +14,17 @@ async function processVehicleEvent(event, config) {
   const eventId = utils.generateEventId(tz);
 
   const { messageId, senderId, senderName, text, imageUrl, ocrResult } = event;
-  const { action } = utils.parseMessage(text);
   const plate = ocrResult.plateText;
   const confidence = ocrResult.confidence;
   const confLabel = utils.confidenceLabel(confidence, config.ocr);
 
-  let recordType = 'Khong xac dinh';
-  if (action === 'VAO') recordType = 'Xe vao';
-  else if (action === 'RA') recordType = 'Xe ra';
-
   // Buoc 1: Luon ghi NHAT KY truoc
-  const originalMessage = `[MSG_ID:${messageId}] ${text || ''}`;
+  const originalMessage = `[MSG_ID:${messageId}]`;
 
   await sheets.appendLogRow({
     eventId,
     timestamp: now,
-    recordType,
+    recordType: 'Chua xac dinh',
     plateAI: plate,
     confidenceLabel: confLabel,
     imageUrl,
@@ -37,24 +33,7 @@ async function processVehicleEvent(event, config) {
     result: '',
   });
 
-  // Buoc 2: Kiem tra cac case loi
-
-  if (!action) {
-    const errorId = utils.generateErrorId(tz);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
-      reason: 'Thieu tu khoa (VAO/RA)',
-      suggestion: 'Chon dung VAO/RA',
-      reviewStatus: 'Chua xu ly',
-    });
-    await sheets.updateLogResult(eventId, 'Thieu tu khoa VAO/RA');
-
-    return {
-      success: false,
-      replyMessage: 'Tin nhan thieu tu khoa VAO hoac RA.\nGui anh kem VAO hoac RA.\n\nGo HELP de xem huong dan.',
-      eventId,
-    };
-  }
+  // Buoc 2: Kiem tra cac case loi anh/OCR
 
   if (!plate) {
     const errorId = utils.generateErrorId(tz);
@@ -68,7 +47,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: 'Khong doc ro bien so, vui long chup lai anh ro hon va gui kem VAO hoac RA.',
+      replyMessage: 'Khong doc ro bien so.\nVui long chup lai anh ro hon, chup thang vao bien so.',
       eventId,
     };
   }
@@ -95,7 +74,7 @@ async function processVehicleEvent(event, config) {
     await sheets.appendReviewRow({
       errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
       reason: 'Bien so khong dung dinh dang',
-      suggestion: 'Sua bien so',
+      suggestion: 'Chup lai anh',
       reviewStatus: 'Chua xu ly',
     });
     await sheets.updateLogResult(eventId, 'Bien so sai format');
@@ -107,39 +86,22 @@ async function processVehicleEvent(event, config) {
     };
   }
 
-  // Buoc 3: Xu ly nghiep vu chinh
-  if (action === 'VAO') {
-    return await handleVehicleIn(eventId, plate, imageUrl, now, config);
+  // Buoc 3: Tu dong xac dinh VAO hay RA
+  // Neu bien so dang trong xuong → RA, nguoc lai → VAO
+  const existing = await sheets.findMainRow(plate, 'Dang trong xuong');
+
+  if (existing) {
+    return await handleVehicleOut(eventId, plate, imageUrl, now, config, existing);
   } else {
-    return await handleVehicleOut(eventId, plate, imageUrl, now, config);
+    return await handleVehicleIn(eventId, plate, imageUrl, now, config);
   }
 }
 
 /**
- * Xu ly Xe vao.
+ * Xu ly Xe vao (biet truoc bien so chua co trong xuong).
  */
 async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
   const vehicleId = utils.generateVehicleId(config.timezone);
-
-  const existing = await sheets.findMainRow(plate, 'Dang trong xuong');
-  let note = '';
-
-  if (existing) {
-    note = `Nghi trung voi ${existing.data.vehicleId}`;
-    await sheets.updateMainRow(existing.rowIndex, {
-      status: 'Trung / nghi trung',
-      note: `Co luot vao moi: ${vehicleId}`,
-      updatedAt: now,
-    });
-
-    const errorId = utils.generateErrorId(config.timezone);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
-      reason: 'Trung tin nhan / trung su kien',
-      suggestion: 'Xac nhan trung hay khong',
-      reviewStatus: 'Chua xu ly',
-    });
-  }
 
   await sheets.appendMainRow({
     vehicleId,
@@ -151,43 +113,24 @@ async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
     imageOut: '',
     status: 'Dang trong xuong',
     priority: 'Binh thuong',
-    note,
+    note: '',
     updatedAt: now,
   });
 
-  await sheets.updateLogResult(eventId, 'Da ghi vao danh sach');
-
-  const replyMsg = existing
-    ? `DA GHI: ${plate} VAO luc ${now}.\nLuu y: bien so nay da co 1 luot vao truoc do chua ra.`
-    : `DA GHI: ${plate} VAO luc ${now}.\nMa luot: ${vehicleId}`;
+  await sheets.updateLogResult(eventId, 'Da ghi VAO danh sach');
 
   logger.info('Vehicle IN processed', { vehicleId, plate });
-  return { success: true, replyMessage: replyMsg, eventId };
+  return {
+    success: true,
+    replyMessage: `DA GHI VAO: ${plate}\nLuc: ${now}\nMa luot: ${vehicleId}`,
+    eventId,
+  };
 }
 
 /**
- * Xu ly Xe ra.
+ * Xu ly Xe ra (nhan existing record tu processVehicleEvent).
  */
-async function handleVehicleOut(eventId, plate, imageUrl, now, config) {
-  const match = await sheets.findMainRow(plate, 'Dang trong xuong');
-
-  if (!match) {
-    const errorId = utils.generateErrorId(config.timezone);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
-      reason: "Khong tim thay luot 'Xe vao' de ghep",
-      suggestion: 'Sua bien so',
-      reviewStatus: 'Chua xu ly',
-    });
-    await sheets.updateLogResult(eventId, 'Khong ghep duoc (thieu luot vao)');
-
-    return {
-      success: false,
-      replyMessage: `Khong tim thay luot Xe vao cho ${plate}.\nQuan ly se kiem tra. Vui long xac nhan lai bien so.`,
-      eventId,
-    };
-  }
-
+async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
   const duration = utils.calcMinutesBetween(match.data.timeIn, now);
 
   await sheets.updateMainRow(match.rowIndex, {
@@ -206,7 +149,7 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config) {
 
   return {
     success: true,
-    replyMessage: `DA GHI: ${plate} RA luc ${now}.\nThoi gian luu: ${durationStr}\nMa luot: ${match.data.vehicleId}`,
+    replyMessage: `DA GHI RA: ${plate}\nLuc: ${now}\nThoi gian luu: ${durationStr}\nMa luot: ${match.data.vehicleId}`,
     eventId,
   };
 }
@@ -240,48 +183,6 @@ async function handleTonKho(config) {
 }
 
 // ──────────────────────────────────────────────
-// GHICHU - Them ghi chu cho xe
-// ──────────────────────────────────────────────
-
-async function handleGhiChu(params, config) {
-  const parts = params.split('|').map(p => p.trim());
-  const plateRaw = parts[0];
-  const content = parts[1];
-
-  if (!plateRaw || !content) {
-    return {
-      replyMessage: 'Sai format. Cach dung:\nGHICHU 30A-12345 | Cho bao hiem xac nhan\nGHICHU 30A-12345 | Len xuong Dong Son',
-    };
-  }
-
-  const plate = utils.normalizePlate(plateRaw);
-  if (!plate || !utils.isValidVietnamPlate(plate)) {
-    return {
-      replyMessage: `Bien so "${plateRaw}" khong hop le.\nVD: GHICHU 30A-12345 | Ly do`,
-    };
-  }
-
-  const current = await sheets.findMainRow(plate, 'Dang trong xuong');
-  if (!current) {
-    return {
-      replyMessage: `Khong tim thay xe ${plate} trong xuong.`,
-    };
-  }
-
-  const now = utils.nowFormatted(config.timezone);
-  await sheets.updateMainRow(current.rowIndex, {
-    note: `[${now}] ${content}`,
-    updatedAt: now,
-  });
-
-  logger.info('Note added', { plate, content });
-
-  return {
-    replyMessage: `DA GHI CHU cho ${plate}:\n"${content}"`,
-  };
-}
-
-// ──────────────────────────────────────────────
 // HELP
 // ──────────────────────────────────────────────
 
@@ -289,12 +190,11 @@ function handleHelp() {
   const msg =
     `HUONG DAN SU DUNG\n` +
     `\n--- Ghi nhan xe ---` +
-    `\nGui anh + VAO = Ghi xe vao` +
-    `\nGui anh + RA = Ghi xe ra` +
+    `\nChup anh bien so → Gui (khong can ghi gi them)` +
+    `\n  Lan 1: Tu dong ghi XE VAO` +
+    `\n  Lan 2: Tu dong ghi XE RA + thoi gian luu` +
     `\n\n--- Xem ton kho ---` +
     `\nTONKHO = Xem xe dang trong xuong` +
-    `\n\n--- Ghi chu ---` +
-    `\nGHICHU 30A-12345 | Ly do = Them ghi chu` +
     `\n\n--- Khac ---` +
     `\nHELP = Xem huong dan nay`;
 
@@ -421,7 +321,6 @@ module.exports = {
   processVehicleEvent,
   checkTimeAlerts,
   handleTonKho,
-  handleGhiChu,
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,

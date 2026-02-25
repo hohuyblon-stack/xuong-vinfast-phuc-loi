@@ -11,7 +11,6 @@ const {
   processVehicleEvent,
   checkTimeAlerts,
   handleTonKho,
-  handleGhiChu,
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
@@ -154,23 +153,12 @@ async function bootstrap() {
 async function processMessageAsync(data) {
   const { messageId, chatId, senderId, senderName, text, imageFileId } = data;
 
+  // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP) ═══
   const parsed = parseMessage(text);
-
-  // ═══ TEXT-ONLY COMMANDS ═══
   if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
     let result;
-
-    switch (parsed.action) {
-      case 'TONKHO':
-        result = await handleTonKho(config);
-        break;
-      case 'GHICHU':
-        result = await handleGhiChu(parsed.params, config);
-        break;
-      case 'HELP':
-        result = handleHelp();
-        break;
-    }
+    if (parsed.action === 'TONKHO') result = await handleTonKho(config);
+    else if (parsed.action === 'HELP') result = handleHelp();
 
     if (result && result.replyMessage) {
       await sendMessage(chatId, result.replyMessage);
@@ -178,15 +166,14 @@ async function processMessageAsync(data) {
     return;
   }
 
-  // ═══ IMAGE-BASED COMMANDS (VAO/RA) ═══
+  // ═══ XU LY ANH BIEN SO ═══
 
   if (!imageFileId) {
     await sendMessage(
       chatId,
-      'De ghi nhan xe, gui:\n' +
-      '1. Anh chup bien so xe\n' +
-      '2. Kem noi dung: VAO hoac RA\n\n' +
-      'Go HELP de xem tat ca lenh.'
+      'Chup anh bien so xe va gui vao day.\n' +
+      'He thong se tu dong ghi VAO hoac RA.\n\n' +
+      'Go HELP de xem huong dan.'
     );
     return;
   }
@@ -210,13 +197,13 @@ async function processMessageAsync(data) {
     ocrResult = { plateText: '', confidence: 0, rawTexts: [] };
   }
 
-  // Xu ly nghiep vu
+  // Xu ly nghiep vu - tu dong xac dinh VAO/RA
   const msgKey = `${chatId}_${messageId}`;
   const result = await processVehicleEvent({
     messageId: msgKey,
     senderId,
     senderName,
-    text,
+    text: '',
     imageUrl,
     ocrResult,
   }, config);

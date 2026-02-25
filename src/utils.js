@@ -99,18 +99,13 @@ function isValidVietnamPlate(plate) {
 // ──────────────────────────────────────────────
 
 /**
- * Cac lenh khong can anh (text-only).
+ * Cac lenh text-only (khong can anh).
  */
-const TEXT_ONLY_ACTIONS = ['TONKHO', 'GHICHU', 'HELP'];
+const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP'];
 
 /**
- * Parse text tin nhan.
- * Cac lenh:
- * - VAO                         -> Ghi nhan xe vao (can anh)
- * - RA                          -> Ghi nhan xe ra (can anh)
- * - TONKHO                      -> Xem xe dang trong xuong
- * - GHICHU <bien so> | <noi dung> -> Them ghi chu cho xe qua 48h
- * - HELP                        -> Huong dan su dung
+ * Parse text tin nhan - chi nhan dang TONKHO va HELP.
+ * Vao/Ra duoc tu dong xac dinh qua anh bien so.
  */
 function parseMessage(text) {
   if (!text) return { action: null, params: '' };
@@ -122,26 +117,14 @@ function parseMessage(text) {
     .trim();
 
   let action = null;
-  let params = '';
 
-  const parts = normalized.split('|').map(p => p.trim());
-  const keyword = parts[0];
-
-  if (/^(TONKHO|TON KHO)$/.test(keyword)) {
+  if (/^(TONKHO|TON KHO)$/.test(normalized)) {
     action = 'TONKHO';
-  } else if (/^GHICHU\b/.test(keyword) || /^GHI CHU\b/.test(keyword)) {
-    action = 'GHICHU';
-    params = keyword.replace(/^(GHICHU|GHI CHU)\s*/, '').trim();
-    if (parts[1]) params += '|' + parts[1].trim();
-  } else if (/^(HELP|HUONGDAN|HUONG DAN)$/.test(keyword)) {
+  } else if (/^(HELP|HUONGDAN|HUONG DAN)$/.test(normalized)) {
     action = 'HELP';
-  } else if (/^(VAO|VA O|V AO)$/.test(keyword) || keyword === 'VAO') {
-    action = 'VAO';
-  } else if (/^RA$/.test(keyword)) {
-    action = 'RA';
   }
 
-  return { action, params };
+  return { action, params: '' };
 }
 
 // ──────────────────────────────────────────────
