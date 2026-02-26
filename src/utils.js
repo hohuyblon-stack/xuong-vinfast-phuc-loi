@@ -95,39 +95,6 @@ function isValidVietnamPlate(plate) {
 }
 
 // ──────────────────────────────────────────────
-// Message Parsing
-// ──────────────────────────────────────────────
-
-/**
- * Cac lenh text-only (khong can anh).
- */
-const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP'];
-
-/**
- * Parse text tin nhan - chi nhan dang TONKHO va HELP.
- * Vao/Ra duoc tu dong xac dinh qua anh bien so.
- */
-function parseMessage(text) {
-  if (!text) return { action: null, params: '' };
-
-  const normalized = text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase()
-    .trim();
-
-  let action = null;
-
-  if (/^(TONKHO|TON KHO)$/.test(normalized)) {
-    action = 'TONKHO';
-  } else if (/^(HELP|HUONGDAN|HUONG DAN)$/.test(normalized)) {
-    action = 'HELP';
-  }
-
-  return { action, params: '' };
-}
-
-// ──────────────────────────────────────────────
 // Confidence mapping
 // ──────────────────────────────────────────────
 
@@ -147,7 +114,5 @@ module.exports = {
   formatDuration,
   normalizePlate,
   isValidVietnamPlate,
-  parseMessage,
   confidenceLabel,
-  TEXT_ONLY_ACTIONS,
 };

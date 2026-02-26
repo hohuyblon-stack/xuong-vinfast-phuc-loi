@@ -35,6 +35,7 @@ function loadConfig() {
         main: 'DANH SACH CHINH',
         log: 'NHAT KY',
         review: 'CAN KIEM TRA',
+        archive: 'LUU TRU',
       },
     },
 
@@ -47,19 +48,9 @@ function loadConfig() {
       confidenceMedium: parseFloat(optionalEnv('OCR_CONFIDENCE_MEDIUM', '0.5')),
     },
 
-    // Canh bao
-    alerts: {
-      warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '24')),
-      urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '48')),
-    },
-
-    // Quan ly
-    manager: {
-      chatIds: optionalEnv('MANAGER_CHAT_IDS', '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean),
-      dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
+    // Luu tru tu dong: xe da RA qua X gio → chuyen sang tab LUU TRU
+    archive: {
+      afterHours: parseFloat(optionalEnv('ARCHIVE_AFTER_HOURS', '24')),
     },
 
     // Timezone

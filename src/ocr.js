@@ -30,7 +30,7 @@ async function downloadImage(imageUrl) {
 
 /**
  * Đọc biển số từ ảnh.
- * @param {string} imageUrl - URL ảnh (từ Zalo)
+ * @param {string} imageUrl - URL ảnh (từ Telegram)
  * @returns {{ plateText: string, confidence: number, rawTexts: string[] }}
  */
 async function recognizePlate(imageUrl) {

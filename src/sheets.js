@@ -15,7 +15,7 @@ const COLUMNS = {
   main: [
     'Ma luot xe', 'Bien so', 'Gio vao', 'Gio ra',
     'Luu trong xuong (phut)', 'Anh luc vao', 'Anh luc ra',
-    'Trang thai', 'Muc uu tien', 'Ghi chu', 'Cap nhat luc',
+    'Trang thai', 'Ghi chu', 'Cap nhat luc',
   ],
   log: [
     'Ma su kien', 'Thoi diem', 'Loai ghi nhan', 'Bien so (AI doc)',
@@ -24,6 +24,11 @@ const COLUMNS = {
   review: [
     'Ma loi', 'Ma su kien', 'Thoi diem', 'Anh', 'Bien so (AI doc)',
     'Ly do', 'Huong xu ly', 'Trang thai xu ly', 'Ghi chu',
+  ],
+  archive: [
+    'Ma luot xe', 'Bien so', 'Gio vao', 'Gio ra',
+    'Luu trong xuong (phut)', 'Anh luc vao', 'Anh luc ra',
+    'Trang thai', 'Ghi chu', 'Cap nhat luc',
   ],
 };
 
@@ -57,6 +62,7 @@ async function ensureTabs() {
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
+    { key: 'archive', name: tabNames.archive, columns: COLUMNS.archive },
   ];
 
   const requests = [];
@@ -92,7 +98,7 @@ async function ensureTabs() {
 }
 
 // ──────────────────────────────────────────────
-// DANH SACH CHINH (11 columns: A-K)
+// DANH SACH CHINH (10 columns: A-J)
 // ──────────────────────────────────────────────
 
 /**
@@ -108,14 +114,13 @@ async function appendMainRow(row) {
     row.imageIn || '',
     row.imageOut || '',
     row.status || 'Dang trong xuong',
-    row.priority || 'Binh thuong',
     row.note || '',
     row.updatedAt || '',
   ]];
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.main}'!A:K`,
+    range: `'${tabNames.main}'!A:J`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
@@ -129,7 +134,7 @@ async function appendMainRow(row) {
  * Tra ve { rowIndex (1-based), data } hoac null.
  */
 async function findMainRow(plate, status) {
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:J`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -147,9 +152,8 @@ async function findMainRow(plate, status) {
           imageIn: row[5],
           imageOut: row[6],
           status: row[7],
-          priority: row[8],
-          note: row[9],
-          updatedAt: row[10],
+          note: row[8],
+          updatedAt: row[9],
         },
       };
     }
@@ -161,18 +165,18 @@ async function findMainRow(plate, status) {
  * Cap nhat 1 dong (partial update).
  */
 async function updateMainRow(rowIndex, updates) {
-  const range = `'${tabNames.main}'!A${rowIndex}:K${rowIndex}`;
+  const range = `'${tabNames.main}'!A${rowIndex}:J${rowIndex}`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const current = (res.data.values && res.data.values[0]) || [];
 
   const fieldMap = {
     vehicleId: 0, plate: 1, timeIn: 2, timeOut: 3,
     duration: 4, imageIn: 5, imageOut: 6, status: 7,
-    priority: 8, note: 9, updatedAt: 10,
+    note: 8, updatedAt: 9,
   };
 
   const updated = [...current];
-  while (updated.length < 11) updated.push('');
+  while (updated.length < 10) updated.push('');
 
   for (const [field, value] of Object.entries(updates)) {
     if (fieldMap[field] !== undefined) {
@@ -190,89 +194,83 @@ async function updateMainRow(rowIndex, updates) {
   logger.info('Updated main row', { rowIndex, updates });
 }
 
-/**
- * Lay tat ca xe "Dang trong xuong".
- */
-async function getAllInWorkshop() {
-  const range = `'${tabNames.main}'!A:K`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row[7] === 'Dang trong xuong') {
-      results.push({
-        rowIndex: i + 1,
-        vehicleId: row[0],
-        plate: row[1],
-        timeIn: row[2],
-        priority: row[8],
-        note: row[9] || '',
-      });
-    }
-  }
-  return results;
-}
+// ──────────────────────────────────────────────
+// LUU TRU - Tu dong chuyen xe da RA > 24h
+// ──────────────────────────────────────────────
 
 /**
- * Lay thong ke tong hop.
+ * Tim tat ca xe "Da ra xuong" qua archiveAfterHours,
+ * copy sang tab LUU TRU roi xoa khoi DANH SACH CHINH.
  */
-async function getDailySummary(tz) {
+async function archiveOldVehicles(archiveAfterHours, tz) {
   const { DateTime } = require('luxon');
-  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
+  const fmt = 'dd/MM/yyyy HH:mm:ss';
+  const now = DateTime.now().setZone(tz);
 
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:J`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
-  let totalIn = 0;
-  let totalOut = 0;
-  let inWorkshop = 0;
-  let warningCount = 0;
-  let urgentCount = 0;
-  let totalDuration = 0;
-  let completedCount = 0;
-
+  // Tim cac dong can archive (duyet nguoc de xoa khong lech index)
+  const toArchive = [];
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    const timeIn = row[2] || '';
-    const timeOut = row[3] || '';
-    const duration = parseInt(row[4], 10);
     const status = row[7] || '';
-    const priority = row[8] || '';
+    const timeOut = row[3] || '';
 
-    if (timeIn.startsWith(today)) totalIn++;
-    if (timeOut.startsWith(today)) totalOut++;
-    if (status === 'Dang trong xuong') {
-      inWorkshop++;
-      if (priority === 'Canh bao') warningCount++;
-      if (priority === 'Khan') urgentCount++;
-    }
-    if (timeOut.startsWith(today) && !isNaN(duration)) {
-      totalDuration += duration;
-      completedCount++;
+    if (status !== 'Da ra xuong' || !timeOut) continue;
+
+    const outTime = DateTime.fromFormat(timeOut, fmt, { zone: tz });
+    if (!outTime.isValid) continue;
+
+    const hoursSinceOut = now.diff(outTime, 'hours').hours;
+    if (hoursSinceOut >= archiveAfterHours) {
+      toArchive.push({ rowIndex: i + 1, data: row });
     }
   }
 
-  const reviewRange = `'${tabNames.review}'!A:I`;
-  const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
-  const reviewRows = reviewRes.data.values || [];
-  let pendingReview = 0;
-  for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chua xu ly') pendingReview++;
+  if (toArchive.length === 0) return 0;
+
+  // Buoc 1: Copy sang LUU TRU
+  const archiveValues = toArchive.map(item => item.data);
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${tabNames.archive}'!A:J`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: archiveValues },
+  });
+
+  // Buoc 2: Xoa khoi DANH SACH CHINH (tu duoi len de khong lech index)
+  // Lay sheetId cua tab main
+  const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const mainSheet = spreadsheet.data.sheets.find(
+    s => s.properties.title === tabNames.main
+  );
+  const mainSheetId = mainSheet.properties.sheetId;
+
+  const deleteRequests = [];
+  for (let i = toArchive.length - 1; i >= 0; i--) {
+    const rowIdx = toArchive[i].rowIndex;
+    deleteRequests.push({
+      deleteDimension: {
+        range: {
+          sheetId: mainSheetId,
+          dimension: 'ROWS',
+          startIndex: rowIdx - 1,
+          endIndex: rowIdx,
+        },
+      },
+    });
   }
 
-  return {
-    today,
-    totalIn,
-    totalOut,
-    inWorkshop,
-    warningCount,
-    urgentCount,
-    pendingReview,
-    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
-  };
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: deleteRequests },
+  });
+
+  logger.info('Archived vehicles', { count: toArchive.length });
+  return toArchive.length;
 }
 
 // ──────────────────────────────────────────────
@@ -388,8 +386,7 @@ module.exports = {
   appendMainRow,
   findMainRow,
   updateMainRow,
-  getAllInWorkshop,
-  getDailySummary,
+  archiveOldVehicles,
   appendLogRow,
   updateLogResult,
   appendReviewRow,
