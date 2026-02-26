@@ -12,7 +12,7 @@ let botToken = '';
  */
 function initTelegram(token) {
   botToken = token;
-  logger.info('Telegram Bot initialized');
+  logger.info('Khoi tao Telegram Bot thanh cong');
 }
 
 /**
@@ -24,7 +24,7 @@ function extractUpdate(update) {
   try {
     const message = update.message;
     if (!message) {
-      logger.info('Ignoring non-message update');
+      logger.info('Bo qua update khong phai tin nhan');
       return null;
     }
 
@@ -53,7 +53,7 @@ function extractUpdate(update) {
       imageFileId,
     };
   } catch (err) {
-    logger.error('Failed to extract Telegram update', { error: err.message });
+    logger.error('Loi trich xuat du lieu Telegram', { error: err.message });
     return null;
   }
 }
@@ -85,9 +85,9 @@ async function sendMessage(chatId, message) {
       parse_mode: 'HTML',
     }, { timeout: 10000 });
 
-    logger.info('Telegram message sent', { chatId, messageLength: message.length });
+    logger.info('Da gui tin nhan Telegram', { chatId, messageLength: message.length });
   } catch (err) {
-    logger.error('Telegram sendMessage failed', { error: err.message, chatId });
+    logger.error('Gui tin nhan Telegram that bai', { error: err.message, chatId });
   }
 }
 
@@ -102,10 +102,10 @@ async function setWebhook(url) {
       allowed_updates: ['message'],
     }, { timeout: 10000 });
 
-    logger.info('Telegram webhook set', { url, ok: response.data.ok });
+    logger.info('Da thiet lap webhook Telegram', { url, ok: response.data.ok });
     return response.data;
   } catch (err) {
-    logger.error('Set webhook failed', { error: err.message });
+    logger.error('Thiet lap webhook that bai', { error: err.message });
     throw err;
   }
 }

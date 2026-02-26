@@ -13,13 +13,13 @@ async function main() {
   await initSheets(config.sheets);
   initTelegram(config.telegram.botToken);
 
-  logger.info('Running alert check...');
+  logger.info('Dang kiem tra canh bao...');
   const updated = await checkTimeAlerts(config);
-  logger.info(`Alert check complete: ${updated} vehicles updated`);
+  logger.info(`Kiem tra canh bao hoan thanh: cap nhat ${updated} xe`);
   process.exit(0);
 }
 
 main().catch(err => {
-  logger.error('Alert check failed', { error: err.message });
+  logger.error('Kiem tra canh bao that bai', { error: err.message });
   process.exit(1);
 });

@@ -119,7 +119,7 @@ async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
 
   await sheets.updateLogResult(eventId, 'Da ghi VAO danh sach');
 
-  logger.info('Vehicle IN processed', { vehicleId, plate });
+  logger.info('Da xu ly xe VAO', { vehicleId, plate });
   return {
     success: true,
     replyMessage: `DA GHI VAO: ${plate}\nLuc: ${now}\nMa luot: ${vehicleId}`,
@@ -145,7 +145,7 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
   await sheets.updateLogResult(eventId, 'Da ghep cap thanh cong');
 
   const durationStr = utils.formatDuration(duration);
-  logger.info('Vehicle OUT processed', { vehicleId: match.data.vehicleId, plate, duration });
+  logger.info('Da xu ly xe RA', { vehicleId: match.data.vehicleId, plate, duration });
 
   return {
     success: true,
@@ -226,7 +226,7 @@ async function checkTimeAlerts(config) {
         updatedAt: utils.nowFormatted(tz),
       });
       updated++;
-      logger.info('Alert level changed', {
+      logger.info('Muc canh bao thay doi', {
         plate: v.plate,
         vehicleId: v.vehicleId,
         hours: Math.round(hours * 10) / 10,
@@ -241,7 +241,7 @@ async function checkTimeAlerts(config) {
           `[${icon}] Xe ${v.plate} da trong xuong ${hStr} gio ${mStr} phut.\n` +
           `Vao luc: ${v.timeIn}\nMa luot: ${v.vehicleId}`;
         notifyManagers(alertMsg, config).catch(err => {
-          logger.error('Manager alert failed', { error: err.message });
+          logger.error('Gui canh bao quan ly that bai', { error: err.message });
         });
       }
     }
@@ -299,7 +299,7 @@ async function handleDailyReport(config) {
 async function sendScheduledDailyReport(config) {
   const report = await handleDailyReport(config);
   await notifyManagers(report.replyMessage, config);
-  logger.info('Scheduled daily report sent');
+  logger.info('Da gui bao cao tu dong cuoi ngay');
 }
 
 // ──────────────────────────────────────────────
@@ -314,7 +314,7 @@ async function notifyManagers(message, config) {
   for (const chatId of chatIds) {
     await sendMessage(chatId, message);
   }
-  logger.info('Notified managers', { count: chatIds.length });
+  logger.info('Da thong bao cho quan ly', { count: chatIds.length });
 }
 
 module.exports = {

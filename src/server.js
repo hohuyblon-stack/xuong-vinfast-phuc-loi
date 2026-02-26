@@ -56,7 +56,7 @@ async function bootstrap() {
       const data = extractUpdate(req.body);
       if (!data) return;
 
-      logger.info('Telegram message received', {
+      logger.info('Nhan tin nhan Telegram', {
         messageId: data.messageId,
         chatId: data.chatId,
         text: data.text,
@@ -68,19 +68,19 @@ async function bootstrap() {
       const msgKey = `${data.chatId}_${data.messageId}`;
       const processed = await isMessageProcessed(msgKey);
       if (processed) {
-        logger.info('Duplicate message, skipping', { messageId: msgKey });
+        logger.info('Tin nhan trung, bo qua', { messageId: msgKey });
         return;
       }
 
       // Process async
       processMessageAsync(data).catch(err => {
-        logger.error('Async processing failed', { error: err.message, stack: err.stack });
+        logger.error('Xu ly bat dong bo that bai', { error: err.message, stack: err.stack });
       });
 
     } catch (err) {
-      logger.error('Webhook handler error', { error: err.message, stack: err.stack });
+      logger.error('Loi xu ly webhook', { error: err.message, stack: err.stack });
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Internal error' });
+        res.status(500).json({ error: 'Loi he thong' });
       }
     }
   });
@@ -91,7 +91,7 @@ async function bootstrap() {
       const updated = await checkTimeAlerts(config);
       res.json({ status: 'ok', updatedCount: updated });
     } catch (err) {
-      logger.error('Alert check failed', { error: err.message });
+      logger.error('Kiem tra canh bao that bai', { error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -102,7 +102,7 @@ async function bootstrap() {
       const report = await handleDailyReport(config);
       res.json({ status: 'ok', report: report.replyMessage });
     } catch (err) {
-      logger.error('Daily report failed', { error: err.message });
+      logger.error('Bao cao ngay that bai', { error: err.message });
       res.status(500).json({ error: err.message });
     }
   });
@@ -110,23 +110,23 @@ async function bootstrap() {
   // Start server
   const port = config.port;
   app.listen(port, async () => {
-    logger.info(`Server started on port ${port}`);
+    logger.info(`May chu da khoi dong tren cong ${port}`);
     logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Telegram Bot)');
-    logger.info('Webhook URL: POST /webhook/telegram');
+    logger.info('Duong dan webhook: POST /webhook/telegram');
 
     // Tu dong set webhook neu co TELEGRAM_WEBHOOK_URL
     if (config.telegram.webhookUrl) {
       try {
         const webhookFullUrl = `${config.telegram.webhookUrl}/webhook/telegram`;
         await setWebhook(webhookFullUrl);
-        logger.info(`Telegram webhook set: ${webhookFullUrl}`);
+        logger.info(`Da thiet lap webhook Telegram: ${webhookFullUrl}`);
       } catch (err) {
-        logger.error('Failed to set Telegram webhook', { error: err.message });
+        logger.error('Thiet lap webhook Telegram that bai', { error: err.message });
       }
     }
 
     if (config.manager.chatIds.length > 0) {
-      logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
+      logger.info(`Da cau hinh ${config.manager.chatIds.length} ID quan ly`);
     }
   });
 
@@ -135,10 +135,10 @@ async function bootstrap() {
     try {
       const updated = await checkTimeAlerts(config);
       if (updated > 0) {
-        logger.info(`Alert check: ${updated} vehicles updated`);
+        logger.info(`Kiem tra canh bao: cap nhat ${updated} xe`);
       }
     } catch (err) {
-      logger.error('Periodic alert check failed', { error: err.message });
+      logger.error('Kiem tra canh bao dinh ky that bai', { error: err.message });
     }
   }, 30 * 60 * 1000);
 
@@ -183,7 +183,7 @@ async function processMessageAsync(data) {
   try {
     imageUrl = await getFileUrl(imageFileId);
   } catch (err) {
-    logger.error('Failed to get Telegram file URL', { error: err.message });
+    logger.error('Khong lay duoc URL file Telegram', { error: err.message });
     await sendMessage(chatId, 'Khong tai duoc anh. Vui long gui lai.');
     return;
   }
@@ -193,7 +193,7 @@ async function processMessageAsync(data) {
   try {
     ocrResult = await recognizePlate(imageUrl);
   } catch (err) {
-    logger.error('OCR failed', { error: err.message });
+    logger.error('OCR that bai', { error: err.message });
     ocrResult = { plateText: '', confidence: 0, rawTexts: [] };
   }
 
@@ -215,7 +215,7 @@ async function processMessageAsync(data) {
 
   // Check alerts sau moi event
   await checkTimeAlerts(config).catch(err => {
-    logger.error('Post-event alert check failed', { error: err.message });
+    logger.error('Kiem tra canh bao sau su kien that bai', { error: err.message });
   });
 }
 
@@ -228,7 +228,7 @@ function scheduleDailyReport() {
   const chatIds = config.manager.chatIds;
 
   if (chatIds.length === 0) {
-    logger.info('No manager chat IDs configured - daily report disabled');
+    logger.info('Chua cau hinh ID quan ly - tat bao cao tu dong cuoi ngay');
     return;
   }
 
@@ -244,12 +244,12 @@ function scheduleDailyReport() {
       try {
         await sendScheduledDailyReport(config);
       } catch (err) {
-        logger.error('Scheduled daily report failed', { error: err.message });
+        logger.error('Bao cao tu dong cuoi ngay that bai', { error: err.message });
       }
     }
   }, 60 * 1000);
 
-  logger.info(`Daily report scheduled at ${reportHour}:00`);
+  logger.info(`Da lich bao cao cuoi ngay luc ${reportHour}:00`);
 }
 
 // ──────────────────────────────────────────────
@@ -257,6 +257,6 @@ function scheduleDailyReport() {
 // ──────────────────────────────────────────────
 
 bootstrap().catch(err => {
-  logger.error('Bootstrap failed', { error: err.message, stack: err.stack });
+  logger.error('Khoi dong he thong that bai', { error: err.message, stack: err.stack });
   process.exit(1);
 });

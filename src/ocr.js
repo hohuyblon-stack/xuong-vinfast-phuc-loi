@@ -14,7 +14,7 @@ function initOcr(credentials) {
   visionClient = new vision.ImageAnnotatorClient({
     credentials,
   });
-  logger.info('Google Cloud Vision client initialized');
+  logger.info('Khoi tao Google Cloud Vision thanh cong');
 }
 
 /**
@@ -35,7 +35,7 @@ async function downloadImage(imageUrl) {
  */
 async function recognizePlate(imageUrl) {
   if (!visionClient) {
-    throw new Error('OCR client not initialized. Call initOcr() first.');
+    throw new Error('OCR chua duoc khoi tao. Goi initOcr() truoc.');
   }
 
   const result = {
@@ -54,13 +54,13 @@ async function recognizePlate(imageUrl) {
     });
 
     if (response.error) {
-      logger.error('Vision API error', { error: response.error });
+      logger.error('Loi Vision API', { error: response.error });
       return result;
     }
 
     const annotations = response.textAnnotations;
     if (!annotations || annotations.length === 0) {
-      logger.warn('No text detected in image');
+      logger.warn('Khong phat hien chu trong anh');
       return result;
     }
 
@@ -116,13 +116,13 @@ async function recognizePlate(imageUrl) {
       }
     }
 
-    logger.info('OCR result', {
+    logger.info('Ket qua OCR', {
       plateText: result.plateText,
       confidence: result.confidence,
       candidateCount: candidates.length,
     });
   } catch (err) {
-    logger.error('OCR processing failed', { error: err.message, imageUrl });
+    logger.error('OCR xu ly that bai', { error: err.message, imageUrl });
   }
 
   return result;

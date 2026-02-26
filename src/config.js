@@ -7,7 +7,7 @@
 function requireEnv(key) {
   const val = process.env[key];
   if (!val) {
-    throw new Error(`Missing required env var: ${key}`);
+    throw new Error(`Thieu bien moi truong bat buoc: ${key}`);
   }
   return val;
 }

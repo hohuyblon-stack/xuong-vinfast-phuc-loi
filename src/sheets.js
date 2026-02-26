@@ -43,7 +43,7 @@ async function initSheets(config) {
   sheetsApi = google.sheets({ version: 'v4', auth });
 
   await ensureTabs();
-  logger.info('Google Sheets initialized', { spreadsheetId });
+  logger.info('Khoi tao Google Sheets thanh cong', { spreadsheetId });
 }
 
 /**
@@ -73,7 +73,7 @@ async function ensureTabs() {
       spreadsheetId,
       requestBody: { requests },
     });
-    logger.info('Created missing tabs', { count: requests.length });
+    logger.info('Da tao tab con thieu', { count: requests.length });
   }
 
   for (const tab of tabConfigs) {
@@ -86,7 +86,7 @@ async function ensureTabs() {
         valueInputOption: 'RAW',
         requestBody: { values: [tab.columns] },
       });
-      logger.info(`Wrote header for tab "${tab.name}"`);
+      logger.info(`Da ghi header cho tab "${tab.name}"`);
     }
   }
 }
@@ -121,7 +121,7 @@ async function appendMainRow(row) {
     requestBody: { values },
   });
 
-  logger.info('Appended main row', { vehicleId: row.vehicleId, plate: row.plate });
+  logger.info('Da them dong vao danh sach chinh', { vehicleId: row.vehicleId, plate: row.plate });
 }
 
 /**
@@ -187,7 +187,7 @@ async function updateMainRow(rowIndex, updates) {
     requestBody: { values: [updated] },
   });
 
-  logger.info('Updated main row', { rowIndex, updates });
+  logger.info('Da cap nhat dong danh sach chinh', { rowIndex, updates });
 }
 
 /**
@@ -300,7 +300,7 @@ async function appendLogRow(row) {
     requestBody: { values },
   });
 
-  logger.info('Appended log row', { eventId: row.eventId });
+  logger.info('Da them dong nhat ky', { eventId: row.eventId });
 }
 
 async function updateLogResult(eventId, result) {
@@ -317,7 +317,7 @@ async function updateLogResult(eventId, result) {
         valueInputOption: 'RAW',
         requestBody: { values: [[result]] },
       });
-      logger.info('Updated log result', { eventId, result });
+      logger.info('Da cap nhat ket qua nhat ky', { eventId, result });
       return;
     }
   }
@@ -348,7 +348,7 @@ async function appendReviewRow(row) {
     requestBody: { values },
   });
 
-  logger.info('Appended review row', { errorId: row.errorId, reason: row.reason });
+  logger.info('Da them dong can kiem tra', { errorId: row.errorId, reason: row.reason });
 }
 
 // ──────────────────────────────────────────────
