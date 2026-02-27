@@ -76,8 +76,13 @@ async function bootstrap() {
       }
 
       // Process async
-      processMessageAsync(data).catch(err => {
+      processMessageAsync(data).catch(async (err) => {
         logger.error('Async processing failed', { error: err.message, stack: err.stack });
+        try {
+          await sendMessage(data.chatId, 'He thong gap loi khi xu ly. Vui long thu lai sau.');
+        } catch (_) {
+          // Ignore send error
+        }
       });
 
     } catch (err) {

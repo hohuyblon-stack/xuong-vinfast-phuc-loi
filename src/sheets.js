@@ -356,6 +356,8 @@ async function appendReviewRow(row) {
 // ──────────────────────────────────────────────
 
 async function isMessageProcessed(messageId) {
+  if (!sheetsApi) return false;
+
   const range = `'${tabNames.log}'!H:H`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
