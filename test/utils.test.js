@@ -5,14 +5,12 @@ const assert = require('node:assert/strict');
 const {
   normalizePlate,
   isValidVietnamPlate,
-  parseMessage,
   calcMinutesBetween,
   confidenceLabel,
   generateVehicleId,
   generateEventId,
   generateErrorId,
   formatDuration,
-  TEXT_ONLY_ACTIONS,
 } = require('../src/utils');
 
 // ──────────────────────────────────────────────
@@ -58,117 +56,6 @@ describe('isValidVietnamPlate', () => {
     assert.equal(isValidVietnamPlate('1A-123'), false);
     assert.equal(isValidVietnamPlate(''), false);
     assert.equal(isValidVietnamPlate(null), false);
-  });
-});
-
-// ──────────────────────────────────────────────
-// Test: parseMessage - VAO/RA
-// ──────────────────────────────────────────────
-
-describe('parseMessage - VAO/RA', () => {
-  it('nhan dien VAO', () => {
-    const r = parseMessage('VAO');
-    assert.equal(r.action, 'VAO');
-    assert.equal(r.params, '');
-  });
-
-  it('nhan dien vao (lowercase)', () => {
-    assert.equal(parseMessage('vao').action, 'VAO');
-  });
-
-  it('nhan dien RA', () => {
-    const r = parseMessage('RA');
-    assert.equal(r.action, 'RA');
-    assert.equal(r.params, '');
-  });
-
-  it('nhan dien ra (lowercase)', () => {
-    assert.equal(parseMessage('ra').action, 'RA');
-  });
-
-  it('tra null cho text khong co tu khoa', () => {
-    assert.equal(parseMessage('xin chao').action, null);
-    assert.equal(parseMessage('').action, null);
-    assert.equal(parseMessage(null).action, null);
-  });
-});
-
-// ──────────────────────────────────────────────
-// Test: parseMessage - TONKHO
-// ──────────────────────────────────────────────
-
-describe('parseMessage - TONKHO', () => {
-  it('nhan dien TONKHO', () => {
-    assert.equal(parseMessage('TONKHO').action, 'TONKHO');
-  });
-
-  it('nhan dien tonkho (lowercase)', () => {
-    assert.equal(parseMessage('tonkho').action, 'TONKHO');
-  });
-
-  it('nhan dien TON KHO (co dau cach)', () => {
-    assert.equal(parseMessage('TON KHO').action, 'TONKHO');
-  });
-});
-
-// ──────────────────────────────────────────────
-// Test: parseMessage - GHICHU
-// ──────────────────────────────────────────────
-
-describe('parseMessage - GHICHU', () => {
-  it('nhan dien GHICHU voi bien so va noi dung', () => {
-    const r = parseMessage('GHICHU 30A-12345 | Cho bao hiem');
-    assert.equal(r.action, 'GHICHU');
-    assert.ok(r.params.includes('30A-12345'));
-    assert.ok(r.params.includes('CHO BAO HIEM'));
-  });
-
-  it('nhan dien GHICHU khong co noi dung', () => {
-    const r = parseMessage('GHICHU 30A-12345');
-    assert.equal(r.action, 'GHICHU');
-    assert.equal(r.params, '30A-12345');
-  });
-
-  it('nhan dien GHI CHU (co dau cach)', () => {
-    const r = parseMessage('GHI CHU 30A-12345 | Ly do');
-    assert.equal(r.action, 'GHICHU');
-    assert.ok(r.params.includes('30A-12345'));
-  });
-});
-
-// ──────────────────────────────────────────────
-// Test: parseMessage - HELP
-// ──────────────────────────────────────────────
-
-describe('parseMessage - HELP', () => {
-  it('nhan dien HELP', () => {
-    assert.equal(parseMessage('HELP').action, 'HELP');
-  });
-
-  it('nhan dien help (lowercase)', () => {
-    assert.equal(parseMessage('help').action, 'HELP');
-  });
-
-  it('nhan dien HUONGDAN', () => {
-    assert.equal(parseMessage('HUONGDAN').action, 'HELP');
-  });
-
-  it('nhan dien HUONG DAN (co dau cach)', () => {
-    assert.equal(parseMessage('HUONG DAN').action, 'HELP');
-  });
-});
-
-// ──────────────────────────────────────────────
-// Test: TEXT_ONLY_ACTIONS
-// ──────────────────────────────────────────────
-
-describe('TEXT_ONLY_ACTIONS', () => {
-  it('chua dung cac command text-only', () => {
-    assert.ok(TEXT_ONLY_ACTIONS.includes('TONKHO'));
-    assert.ok(TEXT_ONLY_ACTIONS.includes('GHICHU'));
-    assert.ok(TEXT_ONLY_ACTIONS.includes('HELP'));
-    assert.ok(!TEXT_ONLY_ACTIONS.includes('VAO'));
-    assert.ok(!TEXT_ONLY_ACTIONS.includes('RA'));
   });
 });
 

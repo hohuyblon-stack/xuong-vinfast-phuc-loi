@@ -10,12 +10,9 @@ const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = req
 const {
   processVehicleEvent,
   checkTimeAlerts,
-  handleTonKho,
-  handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
 } = require('./matcher');
-const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const logger = require('./logger');
 
 // ──────────────────────────────────────────────
@@ -153,27 +150,13 @@ async function bootstrap() {
 async function processMessageAsync(data) {
   const { messageId, chatId, senderId, senderName, text, imageFileId } = data;
 
-  // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP) ═══
-  const parsed = parseMessage(text);
-  if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
-    let result;
-    if (parsed.action === 'TONKHO') result = await handleTonKho(config);
-    else if (parsed.action === 'HELP') result = handleHelp();
-
-    if (result && result.replyMessage) {
-      await sendMessage(chatId, result.replyMessage);
-    }
-    return;
-  }
-
-  // ═══ XU LY ANH BIEN SO ═══
+  // ═══ CHI XU LY ANH - BO QUA TIN NHAN CHU ═══
 
   if (!imageFileId) {
     await sendMessage(
       chatId,
-      'Chup anh bien so xe va gui vao day.\n' +
-      'He thong se tu dong ghi VAO hoac RA.\n\n' +
-      'Go HELP de xem huong dan.'
+      'Vui long gui anh chup bien so xe.\n' +
+      'He thong chi nhan anh, tu dong ghi nhan xe VAO hoac RA.'
     );
     return;
   }

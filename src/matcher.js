@@ -155,53 +155,6 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
 }
 
 // ──────────────────────────────────────────────
-// TONKHO - Xem xe dang trong xuong
-// ──────────────────────────────────────────────
-
-async function handleTonKho(config) {
-  const tz = config.timezone;
-  const vehicles = await sheets.getAllInWorkshop();
-
-  if (vehicles.length === 0) {
-    return { replyMessage: 'TON KHO: Hien khong co xe nao trong xuong.' };
-  }
-
-  let msg = `TON KHO: ${vehicles.length} xe trong xuong\n`;
-
-  for (const v of vehicles) {
-    const hours = utils.hoursSince(v.timeIn, tz);
-    const hStr = Math.floor(hours);
-    const mStr = Math.round((hours % 1) * 60);
-    let icon = '';
-    if (v.priority === 'Khan') icon = '[KHAN] ';
-    else if (v.priority === 'Canh bao') icon = '[CB] ';
-    msg += `\n${icon}${v.plate} - ${hStr}h${mStr}p - vao ${v.timeIn}`;
-    if (v.note) msg += ` (${v.note})`;
-  }
-
-  return { replyMessage: msg };
-}
-
-// ──────────────────────────────────────────────
-// HELP
-// ──────────────────────────────────────────────
-
-function handleHelp() {
-  const msg =
-    `HUONG DAN SU DUNG\n` +
-    `\n--- Ghi nhan xe ---` +
-    `\nChup anh bien so → Gui (khong can ghi gi them)` +
-    `\n  Lan 1: Tu dong ghi XE VAO` +
-    `\n  Lan 2: Tu dong ghi XE RA + thoi gian luu` +
-    `\n\n--- Xem ton kho ---` +
-    `\nTONKHO = Xem xe dang trong xuong` +
-    `\n\n--- Khac ---` +
-    `\nHELP = Xem huong dan nay`;
-
-  return { replyMessage: msg };
-}
-
-// ──────────────────────────────────────────────
 // Kiem tra canh bao thoi gian luu (24h/48h)
 // ──────────────────────────────────────────────
 
@@ -320,8 +273,6 @@ async function notifyManagers(message, config) {
 module.exports = {
   processVehicleEvent,
   checkTimeAlerts,
-  handleTonKho,
-  handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
 };
