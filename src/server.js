@@ -25,7 +25,13 @@ async function bootstrap() {
   config = loadConfig();
 
   // Init Google Sheets
-  await initSheets(config.sheets);
+  try {
+    await initSheets(config.sheets);
+  } catch (err) {
+    logger.error('Google Sheets init failed - server will start but sheets features are unavailable', {
+      error: err.message,
+    });
+  }
 
   // Init OCR
   initOcr(config.ocr.credentials);

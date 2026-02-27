@@ -19,8 +19,27 @@ function optionalEnv(key, fallback) {
 function parseGoogleCredentials(raw) {
   const creds = JSON.parse(raw);
   if (creds.private_key) {
+    // Handle double-escaped newlines from env var pasting
     creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+    // Ensure key starts and ends correctly
+    if (!creds.private_key.includes('-----BEGIN')) {
+      throw new Error(
+        'Invalid private_key: missing PEM header. ' +
+        'Make sure GOOGLE_CREDENTIALS_JSON contains the full JSON from the downloaded key file.'
+      );
+    }
   }
+  // Log credential info for debugging (no secrets)
+  console.log('[config] Google credentials loaded:', {
+    type: creds.type,
+    project_id: creds.project_id,
+    client_email: creds.client_email,
+    private_key_id: creds.private_key_id,
+    has_private_key: !!creds.private_key,
+    private_key_length: creds.private_key ? creds.private_key.length : 0,
+    private_key_starts: creds.private_key ? creds.private_key.substring(0, 30) + '...' : 'N/A',
+    private_key_ends: creds.private_key ? '...' + creds.private_key.substring(creds.private_key.length - 30) : 'N/A',
+  });
   return creds;
 }
 
