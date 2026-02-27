@@ -19,21 +19,20 @@ function optionalEnv(key, fallback) {
 function parseGoogleCredentials(raw) {
   let cleaned = raw.trim();
 
-  // Strip surrounding single or double quotes (common copy-paste issue)
-  if ((cleaned.startsWith("'") && cleaned.endsWith("'")) ||
-      (cleaned.startsWith('"') && cleaned.endsWith('"') && !cleaned.startsWith('{"'))) {
-    cleaned = cleaned.slice(1, -1);
+  // Strip surrounding single quotes (common copy-paste issue)
+  if (cleaned.startsWith("'") && cleaned.endsWith("'")) {
+    cleaned = cleaned.slice(1, -1).trim();
   }
 
-  // If value looks like JSON content without wrapping braces, add them
-  if (!cleaned.startsWith('{') && cleaned.includes('"type"')) {
+  // If value is missing wrapping braces (user pasted JSON body only), add them
+  if (!cleaned.startsWith('{') && /^\s*"/.test(cleaned)) {
     cleaned = '{' + cleaned + '}';
   }
 
   // Try Base64 decoding if it doesn't look like JSON
   if (!cleaned.startsWith('{')) {
     try {
-      const decoded = Buffer.from(cleaned, 'base64').toString('utf8');
+      const decoded = Buffer.from(cleaned, 'base64').toString('utf8').trim();
       if (decoded.startsWith('{')) {
         cleaned = decoded;
       }
@@ -51,9 +50,9 @@ function parseGoogleCredentials(raw) {
       const unescaped = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
       creds = JSON.parse(unescaped);
     } catch (_) {
-      console.error('[config] GOOGLE_CREDENTIALS_JSON parse failed. Raw value starts with:',
-        JSON.stringify(raw.substring(0, 40)),
-        'length:', raw.length);
+      console.error('[config] GOOGLE_CREDENTIALS_JSON parse failed.',
+        'Cleaned value starts with:', JSON.stringify(cleaned.substring(0, 60)),
+        'length:', cleaned.length);
       throw firstErr;
     }
   }
