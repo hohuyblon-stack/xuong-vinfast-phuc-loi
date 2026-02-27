@@ -88,6 +88,9 @@ Tất cả dữ liệu được tự động lưu vào **Google Sheets** (bảng
 
 Quản lý có thể mở Google Sheets bất kỳ lúc nào để xem dữ liệu theo thời gian thực.
 
+**Link bảng theo dõi:**
+https://docs.google.com/spreadsheets/d/1JorpsUzrBDefnyYYzCffIBKVKTuH13hwNnJM3zFW1Cw
+
 ---
 
 ## LƯU Ý QUAN TRỌNG
