@@ -247,5 +247,19 @@ function scheduleDailyReport() {
 
 bootstrap().catch(err => {
   logger.error('Bootstrap failed', { error: err.message, stack: err.stack });
-  process.exit(1);
+
+  // Start a minimal server so Render health checks pass and we can diagnose
+  const app = express();
+  app.get('/health', (_req, res) => {
+    res.status(503).json({
+      status: 'error',
+      service: 'xuong-vinfast-phuc-loi',
+      error: 'Bootstrap failed: ' + err.message,
+      time: new Date().toISOString(),
+    });
+  });
+  const port = parseInt(process.env.PORT || '3000', 10);
+  app.listen(port, () => {
+    logger.info(`Fallback server started on port ${port} (bootstrap failed)`);
+  });
 });

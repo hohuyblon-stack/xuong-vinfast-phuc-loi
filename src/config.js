@@ -17,7 +17,50 @@ function optionalEnv(key, fallback) {
 }
 
 function parseGoogleCredentials(raw) {
-  const creds = JSON.parse(raw);
+  let cleaned = raw.trim();
+
+  // Strip surrounding single or double quotes (common copy-paste issue)
+  if ((cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+      (cleaned.startsWith('"') && cleaned.endsWith('"') && !cleaned.startsWith('{"'))) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  // Try Base64 decoding if it doesn't look like JSON
+  if (!cleaned.startsWith('{')) {
+    try {
+      const decoded = Buffer.from(cleaned, 'base64').toString('utf8');
+      if (decoded.startsWith('{')) {
+        cleaned = decoded;
+      }
+    } catch (_) {
+      // Not base64, continue
+    }
+  }
+
+  // Handle double-stringified JSON (value is a JSON string containing escaped JSON)
+  let creds;
+  try {
+    creds = JSON.parse(cleaned);
+  } catch (firstErr) {
+    // Try unescaping common shell/env var escaping patterns
+    try {
+      // Remove backslash-escaping of quotes: \" -> "
+      const unescaped = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
+      creds = JSON.parse(unescaped);
+    } catch (_) {
+      // Log the raw value shape to help debug
+      console.error('[config] GOOGLE_CREDENTIALS_JSON parse failed. Raw value starts with:',
+        JSON.stringify(raw.substring(0, 40)),
+        'length:', raw.length);
+      throw firstErr;
+    }
+  }
+
+  // If JSON.parse returned a string, it was double-stringified - parse again
+  if (typeof creds === 'string') {
+    creds = JSON.parse(creds);
+  }
+
   if (creds.private_key) {
     // Handle double-escaped newlines from env var pasting
     creds.private_key = creds.private_key.replace(/\\n/g, '\n');
@@ -37,8 +80,6 @@ function parseGoogleCredentials(raw) {
     private_key_id: creds.private_key_id,
     has_private_key: !!creds.private_key,
     private_key_length: creds.private_key ? creds.private_key.length : 0,
-    private_key_starts: creds.private_key ? creds.private_key.substring(0, 30) + '...' : 'N/A',
-    private_key_ends: creds.private_key ? '...' + creds.private_key.substring(creds.private_key.length - 30) : 'N/A',
   });
   return creds;
 }
