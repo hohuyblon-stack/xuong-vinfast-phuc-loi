@@ -60,6 +60,7 @@ function loadConfig() {
         .map(s => s.trim())
         .filter(Boolean),
       dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
+      productivityReportHour: parseInt(optionalEnv('PRODUCTIVITY_REPORT_HOUR', '20'), 10),
     },
 
     // Timezone

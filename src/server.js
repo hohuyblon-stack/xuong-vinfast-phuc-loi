@@ -14,6 +14,8 @@ const {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  handleProductivityReport,
+  sendScheduledProductivityReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const logger = require('./logger');
@@ -107,6 +109,17 @@ async function bootstrap() {
     }
   });
 
+  // Admin: trigger productivity report
+  app.post('/admin/productivity-report', async (_req, res) => {
+    try {
+      const report = await handleProductivityReport(config);
+      res.json({ status: 'ok', report: report.replyMessage });
+    } catch (err) {
+      logger.error('Productivity report failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Start server
   const port = config.port;
   app.listen(port, async () => {
@@ -144,6 +157,9 @@ async function bootstrap() {
 
   // Bao cao tu dong cuoi ngay
   scheduleDailyReport();
+
+  // Bao cao nang suat chi tiet
+  scheduleProductivityReport();
 }
 
 // ──────────────────────────────────────────────
@@ -250,6 +266,39 @@ function scheduleDailyReport() {
   }, 60 * 1000);
 
   logger.info(`Daily report scheduled at ${reportHour}:00`);
+}
+
+// ──────────────────────────────────────────────
+// Scheduled productivity report (20h default)
+// ──────────────────────────────────────────────
+
+function scheduleProductivityReport() {
+  const reportHour = config.manager.productivityReportHour;
+  const chatIds = config.manager.chatIds;
+
+  if (chatIds.length === 0) {
+    logger.info('No manager chat IDs configured - productivity report disabled');
+    return;
+  }
+
+  let lastReportDate = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (currentHour === reportHour && lastReportDate !== todayStr) {
+      lastReportDate = todayStr;
+      try {
+        await sendScheduledProductivityReport(config);
+      } catch (err) {
+        logger.error('Scheduled productivity report failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`Productivity report scheduled at ${reportHour}:00`);
 }
 
 // ──────────────────────────────────────────────
