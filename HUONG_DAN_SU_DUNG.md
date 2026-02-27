@@ -76,6 +76,20 @@ Bot tự biết xe đang VÀO hay RA — bạn không cần chọn.
 
 ---
 
+## DỮ LIỆU ĐƯỢC LƯU Ở ĐÂU?
+
+Tất cả dữ liệu được tự động lưu vào **Google Sheets** (bảng tính trực tuyến), gồm 3 tab:
+
+| Tab | Nội dung |
+|---|---|
+| **DANH SACH CHINH** | Danh sách xe vào/ra, thời gian, trạng thái hiện tại |
+| **NHAT KY** | Toàn bộ lịch sử mọi lần gửi ảnh |
+| **CAN KIEM TRA** | Những ảnh bot không đọc được, cần xem lại thủ công |
+
+Quản lý có thể mở Google Sheets bất kỳ lúc nào để xem dữ liệu theo thời gian thực.
+
+---
+
 ## LƯU Ý QUAN TRỌNG
 
 - **Mỗi xe chỉ cần chụp 1 lần** khi vào và **1 lần** khi ra
