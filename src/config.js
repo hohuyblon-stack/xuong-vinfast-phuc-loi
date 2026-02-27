@@ -25,6 +25,11 @@ function parseGoogleCredentials(raw) {
     cleaned = cleaned.slice(1, -1);
   }
 
+  // If value looks like JSON content without wrapping braces, add them
+  if (!cleaned.startsWith('{') && cleaned.includes('"type"')) {
+    cleaned = '{' + cleaned + '}';
+  }
+
   // Try Base64 decoding if it doesn't look like JSON
   if (!cleaned.startsWith('{')) {
     try {
@@ -37,18 +42,15 @@ function parseGoogleCredentials(raw) {
     }
   }
 
-  // Handle double-stringified JSON (value is a JSON string containing escaped JSON)
   let creds;
   try {
     creds = JSON.parse(cleaned);
   } catch (firstErr) {
     // Try unescaping common shell/env var escaping patterns
     try {
-      // Remove backslash-escaping of quotes: \" -> "
       const unescaped = cleaned.replace(/\\"/g, '"').replace(/\\'/g, "'");
       creds = JSON.parse(unescaped);
     } catch (_) {
-      // Log the raw value shape to help debug
       console.error('[config] GOOGLE_CREDENTIALS_JSON parse failed. Raw value starts with:',
         JSON.stringify(raw.substring(0, 40)),
         'length:', raw.length);
