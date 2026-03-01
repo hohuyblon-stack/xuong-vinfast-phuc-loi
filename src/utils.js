@@ -61,8 +61,8 @@ function formatDuration(minutes) {
   if (isNaN(m)) return '';
   const hours = Math.floor(m / 60);
   const mins = m % 60;
-  if (hours > 0) return `${hours} gio ${mins} phut`;
-  return `${mins} phut`;
+  if (hours > 0) return `${hours} giờ ${mins} phút`;
+  return `${mins} phút`;
 }
 
 // ──────────────────────────────────────────────
@@ -132,9 +132,9 @@ function parseMessage(text) {
 // ──────────────────────────────────────────────
 
 function confidenceLabel(confidence, thresholds) {
-  if (confidence >= thresholds.confidenceHigh) return 'Ro';
-  if (confidence >= thresholds.confidenceMedium) return 'Tam duoc';
-  return 'Mo / khong chac';
+  if (confidence >= thresholds.confidenceHigh) return 'Rõ';
+  if (confidence >= thresholds.confidenceMedium) return 'Tạm được';
+  return 'Mờ / không chắc';
 }
 
 module.exports = {

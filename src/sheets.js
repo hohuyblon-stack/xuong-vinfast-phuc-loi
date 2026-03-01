@@ -13,17 +13,17 @@ let tabNames = {};
 
 const COLUMNS = {
   main: [
-    'Ma luot xe', 'Bien so', 'Gio vao', 'Gio ra',
-    'Luu trong xuong (phut)', 'Anh luc vao', 'Anh luc ra',
-    'Trang thai', 'Muc uu tien', 'Ghi chu', 'Cap nhat luc',
+    'Mã lượt xe', 'Biển số', 'Giờ vào', 'Giờ ra',
+    'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
+    'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
   ],
   log: [
-    'Ma su kien', 'Thoi diem', 'Loai ghi nhan', 'Bien so (AI doc)',
-    'Chat luong nhan dang', 'Anh', 'Nguoi gui', 'Tin nhan goc', 'Ket qua xu ly',
+    'Mã sự kiện', 'Thời điểm', 'Loại ghi nhận', 'Biển số (AI đọc)',
+    'Chất lượng nhận dạng', 'Ảnh', 'Người gửi', 'Tin nhắn gốc', 'Kết quả xử lý',
   ],
   review: [
-    'Ma loi', 'Ma su kien', 'Thoi diem', 'Anh', 'Bien so (AI doc)',
-    'Ly do', 'Huong xu ly', 'Trang thai xu ly', 'Ghi chu',
+    'Mã lỗi', 'Mã sự kiện', 'Thời điểm', 'Ảnh', 'Biển số (AI đọc)',
+    'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú',
   ],
 };
 
@@ -107,8 +107,8 @@ async function appendMainRow(row) {
     row.duration || '',
     row.imageIn || '',
     row.imageOut || '',
-    row.status || 'Dang trong xuong',
-    row.priority || 'Binh thuong',
+    row.status || 'Đang trong xưởng',
+    row.priority || 'Bình thường',
     row.note || '',
     row.updatedAt || '',
   ]];
@@ -201,7 +201,7 @@ async function getAllInWorkshop() {
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row[7] === 'Dang trong xuong') {
+    if (row[7] === 'Đang trong xưởng') {
       results.push({
         rowIndex: i + 1,
         vehicleId: row[0],
@@ -244,10 +244,10 @@ async function getDailySummary(tz) {
 
     if (timeIn.startsWith(today)) totalIn++;
     if (timeOut.startsWith(today)) totalOut++;
-    if (status === 'Dang trong xuong') {
+    if (status === 'Đang trong xưởng') {
       inWorkshop++;
-      if (priority === 'Canh bao') warningCount++;
-      if (priority === 'Khan') urgentCount++;
+      if (priority === 'Cảnh báo') warningCount++;
+      if (priority === 'Khẩn') urgentCount++;
     }
     if (timeOut.startsWith(today) && !isNaN(duration)) {
       totalDuration += duration;
@@ -260,7 +260,7 @@ async function getDailySummary(tz) {
   const reviewRows = reviewRes.data.values || [];
   let pendingReview = 0;
   for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chua xu ly') pendingReview++;
+    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
   }
 
   return {
@@ -341,10 +341,10 @@ async function getProductivityData(tz) {
     if (timeOut.startsWith(yesterday)) yesterdayOut++;
 
     // Dang trong xuong
-    if (status === 'Dang trong xuong') {
+    if (status === 'Đang trong xưởng') {
       inWorkshop++;
-      if (priority === 'Canh bao') warningCount++;
-      if (priority === 'Khan') urgentCount++;
+      if (priority === 'Cảnh báo') warningCount++;
+      if (priority === 'Khẩn') urgentCount++;
     }
 
     // Xe hoan thanh hom nay (co thoi gian ra la hom nay + co duration)
@@ -374,7 +374,7 @@ async function getProductivityData(tz) {
   const reviewRows = reviewRes.data.values || [];
   let pendingReview = 0;
   for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chua xu ly') pendingReview++;
+    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
   }
 
   return {
@@ -409,7 +409,7 @@ async function appendLogRow(row) {
   const values = [[
     row.eventId,
     row.timestamp,
-    row.recordType || 'Khong xac dinh',
+    row.recordType || 'Không xác định',
     row.plateAI || '',
     row.confidenceLabel || '',
     row.imageUrl || '',
@@ -462,7 +462,7 @@ async function appendReviewRow(row) {
     row.plateAI || '',
     row.reason || '',
     row.suggestion || '',
-    row.reviewStatus || 'Chua xu ly',
+    row.reviewStatus || 'Chưa xử lý',
     row.reviewNote || '',
   ]];
 

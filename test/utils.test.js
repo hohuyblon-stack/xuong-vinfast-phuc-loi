@@ -192,17 +192,17 @@ describe('calcMinutesBetween', () => {
 
 describe('formatDuration', () => {
   it('format phut thuong', () => {
-    assert.equal(formatDuration(30), '30 phut');
-    assert.equal(formatDuration(0), '0 phut');
+    assert.equal(formatDuration(30), '30 phút');
+    assert.equal(formatDuration(0), '0 phút');
   });
 
   it('format gio + phut', () => {
-    assert.equal(formatDuration(150), '2 gio 30 phut');
-    assert.equal(formatDuration(60), '1 gio 0 phut');
+    assert.equal(formatDuration(150), '2 giờ 30 phút');
+    assert.equal(formatDuration(60), '1 giờ 0 phút');
   });
 
   it('format string number', () => {
-    assert.equal(formatDuration('90'), '1 gio 30 phut');
+    assert.equal(formatDuration('90'), '1 giờ 30 phút');
   });
 
   it('tra empty string cho invalid', () => {
@@ -219,19 +219,19 @@ describe('formatDuration', () => {
 describe('confidenceLabel', () => {
   const thresholds = { confidenceHigh: 0.8, confidenceMedium: 0.5 };
 
-  it('Ro khi confidence >= 0.8', () => {
-    assert.equal(confidenceLabel(0.9, thresholds), 'Ro');
-    assert.equal(confidenceLabel(0.8, thresholds), 'Ro');
+  it('Rõ khi confidence >= 0.8', () => {
+    assert.equal(confidenceLabel(0.9, thresholds), 'Rõ');
+    assert.equal(confidenceLabel(0.8, thresholds), 'Rõ');
   });
 
-  it('Tam duoc khi 0.5 <= confidence < 0.8', () => {
-    assert.equal(confidenceLabel(0.6, thresholds), 'Tam duoc');
-    assert.equal(confidenceLabel(0.5, thresholds), 'Tam duoc');
+  it('Tạm được khi 0.5 <= confidence < 0.8', () => {
+    assert.equal(confidenceLabel(0.6, thresholds), 'Tạm được');
+    assert.equal(confidenceLabel(0.5, thresholds), 'Tạm được');
   });
 
-  it('Mo khi confidence < 0.5', () => {
-    assert.equal(confidenceLabel(0.3, thresholds), 'Mo / khong chac');
-    assert.equal(confidenceLabel(0, thresholds), 'Mo / khong chac');
+  it('Mờ khi confidence < 0.5', () => {
+    assert.equal(confidenceLabel(0.3, thresholds), 'Mờ / không chắc');
+    assert.equal(confidenceLabel(0, thresholds), 'Mờ / không chắc');
   });
 });
 
