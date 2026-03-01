@@ -195,6 +195,9 @@ function handleHelp() {
     `\n  Lần 2: Tự động ghi XE RA + thời gian lưu` +
     `\n\n--- Xem tồn kho ---` +
     `\nTONKHO = Xem xe đang trong xưởng` +
+    `\n\n--- Báo cáo ---` +
+    `\nBAOCAO = Báo cáo tổng hợp trong ngày` +
+    `\nNANGSUAT = Báo cáo năng suất chi tiết` +
     `\n\n--- Khác ---` +
     `\nHELP = Xem hướng dẫn này`;
 
