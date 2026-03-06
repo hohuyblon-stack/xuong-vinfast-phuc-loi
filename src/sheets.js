@@ -315,6 +315,109 @@ async function getDailySummary(tz) {
   };
 }
 
+/**
+ * Lay du lieu nang suat chi tiet cho bao cao NANGSUAT.
+ */
+async function getProductivityData(tz) {
+  const { DateTime } = require('luxon');
+  const now = DateTime.now().setZone(tz);
+  const today = now.toFormat('dd/MM/yyyy');
+  const yesterday = now.minus({ days: 1 }).toFormat('dd/MM/yyyy');
+
+  const range = `'${tabNames.main}'!A:K`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+
+  let todayIn = 0;
+  let todayOut = 0;
+  let inWorkshop = 0;
+  let warningCount = 0;
+  let urgentCount = 0;
+  let totalDuration = 0;
+  let completedCount = 0;
+  let fastestVehicle = null;
+  let slowestVehicle = null;
+
+  let yesterdayIn = 0;
+  let yesterdayOut = 0;
+  let yesterdayTotalDuration = 0;
+  let yesterdayCompletedCount = 0;
+
+  const timeSlots = { sang: 0, chieu: 0, toi: 0, dem: 0 };
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const plate = row[1] || '';
+    const timeIn = row[2] || '';
+    const timeOut = row[3] || '';
+    const duration = parseInt(row[4], 10);
+    const status = row[7] || '';
+    const priority = row[8] || '';
+
+    if (timeIn.startsWith(today)) {
+      todayIn++;
+      const hourMatch = timeIn.match(/\d{2}\/\d{2}\/\d{4} (\d{2}):/);
+      if (hourMatch) {
+        const h = parseInt(hourMatch[1], 10);
+        if (h >= 6 && h < 12) timeSlots.sang++;
+        else if (h >= 12 && h < 18) timeSlots.chieu++;
+        else if (h >= 18) timeSlots.toi++;
+        else timeSlots.dem++;
+      }
+    }
+    if (timeOut.startsWith(today)) todayOut++;
+    if (timeIn.startsWith(yesterday)) yesterdayIn++;
+    if (timeOut.startsWith(yesterday)) yesterdayOut++;
+
+    if (status === 'Dang trong xuong') {
+      inWorkshop++;
+      if (priority === 'Canh bao') warningCount++;
+      if (priority === 'Khan') urgentCount++;
+    }
+
+    if (timeOut.startsWith(today) && !isNaN(duration)) {
+      totalDuration += duration;
+      completedCount++;
+      if (!fastestVehicle || duration < fastestVehicle.duration) fastestVehicle = { plate, duration };
+      if (!slowestVehicle || duration > slowestVehicle.duration) slowestVehicle = { plate, duration };
+    }
+
+    if (timeOut.startsWith(yesterday) && !isNaN(duration)) {
+      yesterdayTotalDuration += duration;
+      yesterdayCompletedCount++;
+    }
+  }
+
+  const reviewRange = `'${tabNames.review}'!A:I`;
+  const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
+  const reviewRows = reviewRes.data.values || [];
+  let pendingReview = 0;
+  for (let i = 1; i < reviewRows.length; i++) {
+    if (reviewRows[i][7] === 'Chua xu ly') pendingReview++;
+  }
+
+  return {
+    today,
+    yesterday,
+    todayIn,
+    todayOut,
+    inWorkshop,
+    warningCount,
+    urgentCount,
+    pendingReview,
+    completedCount,
+    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
+    fastestVehicle,
+    slowestVehicle,
+    timeSlots,
+    yesterdayIn,
+    yesterdayOut,
+    yesterdayAvgDuration: yesterdayCompletedCount > 0
+      ? Math.round(yesterdayTotalDuration / yesterdayCompletedCount) : 0,
+    completionRate: todayIn > 0 ? Math.round((todayOut / todayIn) * 100) : 0,
+  };
+}
+
 // ──────────────────────────────────────────────
 // NHAT KY
 // ──────────────────────────────────────────────
@@ -432,6 +535,7 @@ module.exports = {
   getAllMainRows,
   getTodayEntries,
   getDailySummary,
+  getProductivityData,
   appendLogRow,
   updateLogResult,
   appendReviewRow,

@@ -195,6 +195,9 @@ function handleHelp() {
     `\n  Lần 2: Tự động ghi xe RA + thời gian lưu` +
     `\n\n— Xem tồn kho —` +
     `\nTONKHO — Danh sách xe đang trong xưởng` +
+    `\n\n— Báo cáo —` +
+    `\nBAOCAO — Báo cáo tổng hợp trong ngày` +
+    `\nNANGSUAT — Báo cáo năng suất chi tiết` +
     `\n\n— Khác —` +
     `\nHELP — Xem hướng dẫn này`;
 
@@ -318,6 +321,96 @@ async function notifyManagers(message, config) {
 }
 
 // ──────────────────────────────────────────────
+// BAO CAO NANG SUAT
+// ──────────────────────────────────────────────
+
+async function handleProductivityReport(config) {
+  const tz = config.timezone;
+  const data = await sheets.getProductivityData(tz);
+
+  let msg = `📊 Báo cáo năng suất xưởng — ${data.today}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+  msg += `\n📊 Tổng quan:`;
+  msg += `\n  Xe tiếp nhận hôm nay: ${data.todayIn}`;
+  msg += `\n  Xe hoàn thành hôm nay: ${data.todayOut}`;
+  msg += `\n  Đang trong xưởng: ${data.inWorkshop}`;
+  msg += `\n  Tỷ lệ hoàn thành: ${data.completionRate}%`;
+
+  msg += `\n\n📈 So sánh với hôm qua (${data.yesterday}):`;
+  const diffIn = data.todayIn - data.yesterdayIn;
+  const diffOut = data.todayOut - data.yesterdayOut;
+  const arrowIn = diffIn > 0 ? `+${diffIn} ↑` : diffIn < 0 ? `${diffIn} ↓` : '= bằng';
+  const arrowOut = diffOut > 0 ? `+${diffOut} ↑` : diffOut < 0 ? `${diffOut} ↓` : '= bằng';
+  msg += `\n  Tiếp nhận: ${data.yesterdayIn} → ${data.todayIn} (${arrowIn})`;
+  msg += `\n  Hoàn thành: ${data.yesterdayOut} → ${data.todayOut} (${arrowOut})`;
+
+  if (data.completedCount > 0) {
+    const avgStr = utils.formatDuration(data.avgDuration);
+    msg += `\n\n⏱ Thời gian xử lý:`;
+    msg += `\n  Trung bình: ${avgStr}`;
+    if (data.fastestVehicle) {
+      msg += `\n  Nhanh nhất: ${data.fastestVehicle.plate} (${utils.formatDuration(data.fastestVehicle.duration)})`;
+    }
+    if (data.slowestVehicle) {
+      msg += `\n  Chậm nhất: ${data.slowestVehicle.plate} (${utils.formatDuration(data.slowestVehicle.duration)})`;
+    }
+    if (data.yesterdayAvgDuration > 0) {
+      const diffAvg = data.avgDuration - data.yesterdayAvgDuration;
+      const avgArrow = diffAvg > 0
+        ? `chậm hơn ${utils.formatDuration(Math.abs(diffAvg))}`
+        : diffAvg < 0
+          ? `nhanh hơn ${utils.formatDuration(Math.abs(diffAvg))}`
+          : 'bằng hôm qua';
+      msg += `\n  So với hôm qua: ${avgArrow}`;
+    }
+  }
+
+  if (data.todayIn > 0) {
+    msg += `\n\n🕐 Phân bố khung giờ tiếp nhận:`;
+    msg += `\n  Sáng (6h–12h): ${data.timeSlots.sang} xe`;
+    msg += `\n  Chiều (12h–18h): ${data.timeSlots.chieu} xe`;
+    msg += `\n  Tối (18h–24h): ${data.timeSlots.toi} xe`;
+    if (data.timeSlots.dem > 0) msg += `\n  Đêm (0h–6h): ${data.timeSlots.dem} xe`;
+  }
+
+  if (data.warningCount > 0 || data.urgentCount > 0) {
+    msg += `\n\n⚠️ Cảnh báo:`;
+    if (data.warningCount > 0) msg += `\n  Quá 24h: ${data.warningCount} xe`;
+    if (data.urgentCount > 0) msg += `\n  🚨 Khẩn quá 48h: ${data.urgentCount} xe`;
+  }
+
+  if (data.inWorkshop > 0) {
+    const inWorkshop = await sheets.getAllInWorkshop();
+    msg += `\n\n🔧 Xe đang trong xưởng (${inWorkshop.length}):`;
+    for (const v of inWorkshop) {
+      const hours = utils.hoursSince(v.timeIn, tz);
+      const hStr = Math.floor(hours);
+      const mStr = Math.round((hours % 1) * 60);
+      let icon = '';
+      if (v.priority === 'Khan') icon = '🚨 ';
+      else if (v.priority === 'Canh bao') icon = '⚠️ ';
+      msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
+      if (v.note) msg += ` (${v.note})`;
+    }
+  }
+
+  if (data.pendingReview > 0) {
+    msg += `\n\n📋 Cần kiểm tra thủ công: ${data.pendingReview} mục`;
+  }
+
+  msg += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  return { replyMessage: msg };
+}
+
+async function sendScheduledProductivityReport(config) {
+  const report = await handleProductivityReport(config);
+  await notifyManagers(report.replyMessage, config);
+  logger.info('Scheduled productivity report sent');
+}
+
+// ──────────────────────────────────────────────
 // BAO CAO KE TOAN - xu ly file Excel tu phong ke toan
 // ──────────────────────────────────────────────
 
@@ -341,5 +434,7 @@ module.exports = {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  handleProductivityReport,
+  sendScheduledProductivityReport,
   handleAccountingReport,
 };

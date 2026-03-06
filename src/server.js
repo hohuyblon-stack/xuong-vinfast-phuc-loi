@@ -14,6 +14,8 @@ const {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  handleProductivityReport,
+  sendScheduledProductivityReport,
   handleAccountingReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
@@ -176,6 +178,8 @@ async function processMessageAsync(data) {
     let result;
     if (parsed.action === 'TONKHO') result = await handleTonKho(config);
     else if (parsed.action === 'HELP') result = handleHelp();
+    else if (parsed.action === 'BAOCAO') result = await handleDailyReport(config);
+    else if (parsed.action === 'NANGSUAT') result = await handleProductivityReport(config);
 
     if (result && result.replyMessage) {
       await sendMessage(chatId, result.replyMessage);
