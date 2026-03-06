@@ -102,14 +102,36 @@ async function bootstrap() {
   // Admin: debug sheet data (TEMPORARY)
   app.get('/admin/debug-sheet', async (_req, res) => {
     try {
-      const { getAllMainRows } = require('./sheets');
-      const rows = await getAllMainRows();
-      const sample = rows.slice(0, 5).map(r => ({
-        plate: r.plate, timeIn: r.timeIn, timeOut: r.timeOut, status: r.status,
-      }));
-      res.json({ totalRows: rows.length, sample, lastRow: rows.length > 0 ? rows[rows.length - 1] : null });
+      const { google } = require('googleapis');
+      const sheetId = config.sheets.spreadsheetId;
+      const auth = new google.auth.GoogleAuth({
+        credentials: config.sheets.credentials,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+      });
+      const api = google.sheets({ version: 'v4', auth });
+
+      // List all tabs
+      const meta = await api.spreadsheets.get({ spreadsheetId: sheetId });
+      const tabs = meta.data.sheets.map(s => s.properties.title);
+
+      // Read first 5 rows of each tab
+      const tabData = {};
+      for (const tab of tabs) {
+        const r = await api.spreadsheets.values.get({
+          spreadsheetId: sheetId,
+          range: `'${tab}'!A1:K6`,
+        });
+        tabData[tab] = r.data.values || [];
+      }
+
+      res.json({
+        spreadsheetId: sheetId,
+        tabs,
+        expectedTab: config.sheets.tabNames.main,
+        tabData,
+      });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message, stack: err.stack });
     }
   });
 
