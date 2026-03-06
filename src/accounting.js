@@ -60,8 +60,8 @@ function isToday(timeStr, today) {
  */
 function paymentGroup(order, tracking) {
   const isPaid = order.paymentStatus === 'DA_THANH_TOAN' || order.paymentStatus === 'DA_QUYET_TOAN';
-  const isOut  = tracking.status === 'Da ra xuong';
-  const isIn   = tracking.status === 'Dang trong xuong';
+  const isOut  = tracking.status === 'Đã ra xưởng';
+  const isIn   = tracking.status === 'Đang trong xưởng';
 
   if (isOut && isPaid)  return 'doneAndPaid';
   if (isOut && !isPaid) return 'doneNotPaid';
@@ -89,7 +89,7 @@ async function generateAccountingReport(excelOrders, config) {
     const key = normalizePlate(t.plate);
     const existing = trackingByPlate.get(key);
     // Uu tien: dang trong xuong > ra gan nhat
-    if (!existing || t.status === 'Dang trong xuong') {
+    if (!existing || t.status === 'Đang trong xưởng') {
       trackingByPlate.set(key, t);
     }
   }
@@ -127,7 +127,7 @@ async function generateAccountingReport(excelOrders, config) {
 
   for (const t of allTracking) {
     // Chi quan tam xe dang trong xuong (chua ra)
-    if (t.status !== 'Dang trong xuong') continue;
+    if (t.status !== 'Đang trong xưởng') continue;
     const plate = normalizePlate(t.plate);
     if (orderByPlate.has(plate)) continue; // da co lenh roi
 

@@ -24,7 +24,7 @@ async function processVehicleEvent(event, config) {
   await sheets.appendLogRow({
     eventId,
     timestamp: now,
-    recordType: 'Chua xac dinh',
+    recordType: 'Chưa xác định',
     plateAI: plate,
     confidenceLabel: confLabel,
     imageUrl,
@@ -41,7 +41,7 @@ async function processVehicleEvent(event, config) {
       errorId, eventId, timestamp: now, imageUrl, plateAI: '',
       reason: 'Anh mo / khong thay bien so',
       suggestion: 'Chup lai anh',
-      reviewStatus: 'Chua xu ly',
+      reviewStatus: 'Chưa xử lý',
     });
     await sheets.updateLogResult(eventId, 'Khong doc duoc bien so');
 
@@ -58,7 +58,7 @@ async function processVehicleEvent(event, config) {
       errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
       reason: 'OCR doc khong chac',
       suggestion: 'Chup lai anh',
-      reviewStatus: 'Chua xu ly',
+      reviewStatus: 'Chưa xử lý',
     });
     await sheets.updateLogResult(eventId, 'OCR mo - chuyen kiem tra');
 
@@ -75,7 +75,7 @@ async function processVehicleEvent(event, config) {
       errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
       reason: 'Bien so khong dung dinh dang',
       suggestion: 'Chup lai anh',
-      reviewStatus: 'Chua xu ly',
+      reviewStatus: 'Chưa xử lý',
     });
     await sheets.updateLogResult(eventId, 'Bien so sai format');
 
@@ -88,7 +88,7 @@ async function processVehicleEvent(event, config) {
 
   // Buoc 3: Tu dong xac dinh VAO hay RA
   // Neu bien so dang trong xuong → RA, nguoc lai → VAO
-  const existing = await sheets.findMainRow(plate, 'Dang trong xuong');
+  const existing = await sheets.findMainRow(plate, 'Đang trong xưởng');
 
   if (existing) {
     return await handleVehicleOut(eventId, plate, imageUrl, now, config, existing);
@@ -111,8 +111,8 @@ async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
     duration: '',
     imageIn: imageUrl,
     imageOut: '',
-    status: 'Dang trong xuong',
-    priority: 'Binh thuong',
+    status: 'Đang trong xưởng',
+    priority: 'Bình thường',
     note: '',
     updatedAt: now,
   });
@@ -137,8 +137,8 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
     timeOut: now,
     duration: duration.toString(),
     imageOut: imageUrl,
-    status: 'Da ra xuong',
-    priority: 'Binh thuong',
+    status: 'Đã ra xưởng',
+    priority: 'Bình thường',
     updatedAt: now,
   });
 
@@ -173,8 +173,8 @@ async function handleTonKho(config) {
     const hStr = Math.floor(hours);
     const mStr = Math.round((hours % 1) * 60);
     let icon = '';
-    if (v.priority === 'Khan') icon = '🚨 ';
-    else if (v.priority === 'Canh bao') icon = '⚠️ ';
+    if (v.priority === 'Khẩn') icon = '🚨 ';
+    else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
     msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p — vào ${v.timeIn}`;
     if (v.note) msg += ` (${v.note})`;
   }
@@ -215,12 +215,12 @@ async function checkTimeAlerts(config) {
 
   for (const v of vehicles) {
     const hours = utils.hoursSince(v.timeIn, tz);
-    let newPriority = 'Binh thuong';
+    let newPriority = 'Bình thường';
 
     if (hours >= config.alerts.urgentHours) {
-      newPriority = 'Khan';
+      newPriority = 'Khẩn';
     } else if (hours >= config.alerts.warningHours) {
-      newPriority = 'Canh bao';
+      newPriority = 'Cảnh báo';
     }
 
     if (newPriority !== v.priority) {
@@ -236,10 +236,10 @@ async function checkTimeAlerts(config) {
         newPriority,
       });
 
-      if (newPriority !== 'Binh thuong') {
+      if (newPriority !== 'Bình thường') {
         const hStr = Math.floor(hours);
         const mStr = Math.round((hours % 1) * 60);
-        const icon = newPriority === 'Khan' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
+        const icon = newPriority === 'Khẩn' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
         const alertMsg =
           `${icon} — Xe ${v.plate} đã trong xưởng ${hStr} giờ ${mStr} phút.\n` +
           `Vào lúc: ${v.timeIn}\nMã lượt: ${v.vehicleId}`;
@@ -290,8 +290,8 @@ async function handleDailyReport(config) {
       const hStr = Math.floor(hours);
       const mStr = Math.round((hours % 1) * 60);
       let icon = '';
-      if (v.priority === 'Khan') icon = '🚨 ';
-      else if (v.priority === 'Canh bao') icon = '⚠️ ';
+      if (v.priority === 'Khẩn') icon = '🚨 ';
+      else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
       msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
     }
   }
@@ -388,8 +388,8 @@ async function handleProductivityReport(config) {
       const hStr = Math.floor(hours);
       const mStr = Math.round((hours % 1) * 60);
       let icon = '';
-      if (v.priority === 'Khan') icon = '🚨 ';
-      else if (v.priority === 'Canh bao') icon = '⚠️ ';
+      if (v.priority === 'Khẩn') icon = '🚨 ';
+      else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
       msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
       if (v.note) msg += ` (${v.note})`;
     }

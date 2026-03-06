@@ -32,9 +32,9 @@ function loadConfig() {
       spreadsheetId: requireEnv('GOOGLE_SHEET_ID'),
       credentials: JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
       tabNames: {
-        main: 'DANH SACH CHINH',
-        log: 'NHAT KY',
-        review: 'CAN KIEM TRA',
+        main: optionalEnv('SHEET_TAB_MAIN', 'DANH SÁCH CHÍNH'),
+        log: optionalEnv('SHEET_TAB_LOG', 'NHẬT KÝ'),
+        review: optionalEnv('SHEET_TAB_REVIEW', 'CẦN KIỂM TRA'),
       },
     },
 
