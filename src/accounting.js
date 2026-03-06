@@ -3,17 +3,17 @@
 /**
  * accounting.js - Bao cao ty le chuyen doi xe vao → len lenh sua chua
  *
- * Logic chinh:
- *   - "Xe vao hom nay" = tracking sheet (anh chup bien so)
- *   - "Len lenh" = co trong file Excel xuat tu Cyber/DMS
- *   - Xe vao nhung khong co trong Excel = chua duoc tiep nhan (hoac da ve khong sua)
+ * File Excel tu Cyber chua cac lenh duoc tao NGAY HOM NAY.
+ * He thong tracking chua lich su xe vao/ra tu truoc den nay.
  *
- * 5 nhom bao cao:
- *   [DA RA + XONG]     Da ra xuong + co lenh + da thanh toan/quyet toan
- *   [DA RA + CHUA TT]  Da ra xuong + co lenh + chua thanh toan
- *   [XUONG + DANG SUA] Con trong xuong + co lenh (dang thuc hien)
- *   [XUONG + DA QT]    Con trong xuong + da quyet toan (bat thuong, can kiem tra)
- *   [CHUA TIEP NHAN]   Co xe vao (chup anh) nhung chua co lenh nao trong Cyber
+ * 4 truong hop can quan ly:
+ *   [NGAY]  Vao hom nay + len lenh hom nay     → chuyen doi ngay trong ngay
+ *   [TRE]   Vao ngay truoc + hom nay moi len lenh → ton kho → da duoc xu ly
+ *   [CHO]   Vao hom nay + chua len lenh         → dang cho tiep nhan
+ *   [TON]   Vao ngay truoc + van chua len lenh  → ton kho lau, chua xu ly
+ *
+ * Trong moi truong hop, cung phan loai trang thai thanh toan:
+ *   da ra + da TT / da ra + chua TT / con xuong + dang sua / con xuong + da QT
  */
 
 const { DateTime } = require('luxon');
@@ -43,173 +43,218 @@ function pct(num, denom) {
 }
 
 /**
- * Cross-reference Excel work orders voi tracking data.
- * Chi tinh cho xe VAO NGAY HOM NAY de do ty le chuyen doi chinh xac.
+ * Kiem tra mot chuoi thoi gian co phai ngay hom nay khong.
+ * timeStr dinh dang "dd/MM/yyyy ..." hoac Date object.
+ */
+function isToday(timeStr, today) {
+  if (!timeStr) return false;
+  if (timeStr instanceof Date) {
+    const d = DateTime.fromJSDate(timeStr);
+    return d.toFormat('dd/MM/yyyy') === today;
+  }
+  return String(timeStr).startsWith(today);
+}
+
+/**
+ * Lay trang thai thanh toan de phan nhom chi tiet.
+ */
+function paymentGroup(order, tracking) {
+  const isPaid = order.paymentStatus === 'DA_THANH_TOAN' || order.paymentStatus === 'DA_QUYET_TOAN';
+  const isOut  = tracking.status === 'Da ra xuong';
+  const isIn   = tracking.status === 'Dang trong xuong';
+
+  if (isOut && isPaid)  return 'doneAndPaid';
+  if (isOut && !isPaid) return 'doneNotPaid';
+  if (isIn  && isPaid)  return 'inWorkshopPaid';
+  return 'inWorkshopWorking'; // mac dinh: con xuong + dang sua
+}
+
+/**
+ * Tao bao cao tong hop.
  *
- * @param {Array}  excelOrders - Ket qua tu excel.parseExcelBuffer
+ * @param {Array}  excelOrders - Lenh sua chua tu file Excel Cyber (ngay hom nay)
  * @param {object} config      - App config
- * @returns {Promise<string[]>} - Mang tin nhan gui qua Telegram
+ * @returns {Promise<string[]>}
  */
 async function generateAccountingReport(excelOrders, config) {
   const tz = config.timezone;
+  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
 
-  // Chi lay xe VAO hom nay (khong tinh lich su cu)
-  const todayEntries = await sheets.getTodayEntries(tz);
+  // Lay toan bo lich su tracking (khong gioi han ngay)
+  const allTracking = await sheets.getAllMainRows();
 
-  // Index tracking hom nay theo bien so: plate → entry
-  // Neu 1 bien so vao nhieu lan, uu tien cai dang trong xuong, sau do cai ra gan nhat
-  const todayByPlate = new Map();
-  for (const t of todayEntries) {
+  // Index tracking theo bien so: plate → entry moi nhat (uu tien dang trong xuong)
+  const trackingByPlate = new Map();
+  for (const t of allTracking) {
     const key = normalizePlate(t.plate);
-    const existing = todayByPlate.get(key);
+    const existing = trackingByPlate.get(key);
+    // Uu tien: dang trong xuong > ra gan nhat
     if (!existing || t.status === 'Dang trong xuong') {
-      todayByPlate.set(key, t);
+      trackingByPlate.set(key, t);
     }
   }
 
-  // Index excel theo bien so: plate → order (1 bien so = 1 lenh/ngay)
+  // Index excel theo bien so
   const orderByPlate = new Map();
   for (const order of excelOrders) {
-    if (!orderByPlate.has(order.plate)) {
-      orderByPlate.set(order.plate, order);
-    }
+    if (!orderByPlate.has(order.plate)) orderByPlate.set(order.plate, order);
   }
 
-  const cats = {
-    doneAndPaid:       [], // Da ra + da thanh toan/quyet toan
-    doneNotPaid:       [], // Da ra + chua thanh toan
-    inWorkshopWorking: [], // Con trong xuong + dang sua (binh thuong)
-    inWorkshopPaid:    [], // Con trong xuong + da quyet toan (bat thuong)
-    notReceived:       [], // Xe vao hom nay nhung chua co lenh trong Cyber
-  };
+  // ── Phan loai ──
 
-  // Phan loai xe da vao hom nay
-  for (const [plate, tracking] of todayByPlate) {
-    const order = orderByPlate.get(plate);
+  // Xe co lenh hom nay: phan theo ngay vao + trang thai TT
+  const sameDay    = { doneAndPaid: [], doneNotPaid: [], inWorkshopWorking: [], inWorkshopPaid: [] };
+  const backlog    = { doneAndPaid: [], doneNotPaid: [], inWorkshopWorking: [], inWorkshopPaid: [] };
+  const noTracking = []; // Co lenh nhung khong thay xe trong he thong
 
-    if (!order) {
-      // Xe vao nhung khong co lenh nao → chua duoc tiep nhan
-      cats.notReceived.push({ tracking });
+  for (const [plate, order] of orderByPlate) {
+    const tracking = trackingByPlate.get(plate);
+    if (!tracking) {
+      noTracking.push({ order });
       continue;
     }
 
-    const isPaid = order.paymentStatus === 'DA_THANH_TOAN' || order.paymentStatus === 'DA_QUYET_TOAN';
-    const isOut  = tracking.status === 'Da ra xuong';
-    const isIn   = tracking.status === 'Dang trong xuong';
+    const group = paymentGroup(order, tracking);
+    const enteredToday = isToday(tracking.timeIn, today);
 
-    if (isOut) {
-      if (isPaid) cats.doneAndPaid.push({ order, tracking });
-      else        cats.doneNotPaid.push({ order, tracking });
-    } else if (isIn) {
-      if (isPaid) cats.inWorkshopPaid.push({ order, tracking });
-      else        cats.inWorkshopWorking.push({ order, tracking });
-    } else {
-      // Trang thai khac (hiem gap)
-      cats.inWorkshopWorking.push({ order, tracking });
-    }
+    if (enteredToday) sameDay[group].push({ order, tracking });
+    else              backlog[group].push({ order, tracking });
   }
 
-  const totalIn       = todayByPlate.size;
-  const totalWithOrder = totalIn - cats.notReceived.length;
+  // Xe trong tracking hom nay chua co lenh
+  const waitingToday    = []; // vao hom nay, chua len lenh
+  const waitingBacklog  = []; // vao ngay truoc, van chua len lenh
+
+  for (const t of allTracking) {
+    // Chi quan tam xe dang trong xuong (chua ra)
+    if (t.status !== 'Dang trong xuong') continue;
+    const plate = normalizePlate(t.plate);
+    if (orderByPlate.has(plate)) continue; // da co lenh roi
+
+    if (isToday(t.timeIn, today)) waitingToday.push({ tracking: t });
+    else                          waitingBacklog.push({ tracking: t });
+  }
+
+  const totalWithOrder = orderByPlate.size - noTracking.length;
+  const totalSameDay   = Object.values(sameDay).reduce((s, a) => s + a.length, 0);
+  const totalBacklog   = Object.values(backlog).reduce((s, a) => s + a.length, 0);
+  const totalWaiting   = waitingToday.length + waitingBacklog.length;
 
   logger.info('Accounting report generated', {
-    totalIn,
+    today,
     totalWithOrder,
-    doneAndPaid:       cats.doneAndPaid.length,
-    doneNotPaid:       cats.doneNotPaid.length,
-    inWorkshopWorking: cats.inWorkshopWorking.length,
-    inWorkshopPaid:    cats.inWorkshopPaid.length,
-    notReceived:       cats.notReceived.length,
+    totalSameDay,
+    totalBacklog,
+    waitingToday: waitingToday.length,
+    waitingBacklog: waitingBacklog.length,
+    noTracking: noTracking.length,
   });
 
-  return buildMessages(cats, totalIn, totalWithOrder, excelOrders.length, tz);
+  return buildMessages(
+    { sameDay, backlog, waitingToday, waitingBacklog, noTracking },
+    { totalWithOrder, totalSameDay, totalBacklog, totalWaiting },
+    excelOrders.length,
+    today,
+    tz,
+  );
 }
 
-function buildMessages(cats, totalIn, totalWithOrder, totalExcelOrders, tz) {
-  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
-  const convRate = pct(totalWithOrder, totalIn);
+// ──────────────────────────────────────────────
+// Xay dung tin nhan
+// ──────────────────────────────────────────────
+
+function orderLine(order, tracking, tz) {
+  const timeStr = tracking.timeOut
+    ? `Vao: ${tracking.timeIn} | Ra: ${tracking.timeOut}`
+    : `Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})`;
+
+  return (
+    `\n${order.plateRaw} - ${order.model}\n` +
+    `  KH: ${order.customer}\n` +
+    `  ${timeStr}\n` +
+    `  Lenh: ${order.workOrder}\n` +
+    `  Tong: ${formatMoney(order.total)} | ${order.status || 'Chua quyet toan'}\n`
+  );
+}
+
+function renderGroup(title, group, tz) {
+  const total = Object.values(group).reduce((s, a) => s + a.length, 0);
+  if (total === 0) return null;
+
+  let block = `${title} (${total}):\n`;
+
+  if (group.doneAndPaid.length > 0) {
+    block += `\n-- Da ra, da thanh toan (${group.doneAndPaid.length}) --`;
+    for (const { order, tracking } of group.doneAndPaid) block += orderLine(order, tracking, tz);
+  }
+  if (group.doneNotPaid.length > 0) {
+    block += `\n-- Da ra, CHUA thanh toan (${group.doneNotPaid.length}) --`;
+    for (const { order, tracking } of group.doneNotPaid) block += orderLine(order, tracking, tz);
+  }
+  if (group.inWorkshopWorking.length > 0) {
+    block += `\n-- Con trong xuong, dang sua (${group.inWorkshopWorking.length}) --`;
+    for (const { order, tracking } of group.inWorkshopWorking) block += orderLine(order, tracking, tz);
+  }
+  if (group.inWorkshopPaid.length > 0) {
+    block += `\n-- Con xuong + DA QUYET TOAN (can kiem tra) (${group.inWorkshopPaid.length}) --`;
+    for (const { order, tracking } of group.inWorkshopPaid) block += orderLine(order, tracking, tz);
+  }
+
+  return block;
+}
+
+function buildMessages(cats, totals, totalExcelOrders, today, tz) {
   const parts = [];
 
-  // ── Tong quan (metric chinh) ──
+  // ── Header / Tong quan ──
+  const convRate = pct(totals.totalWithOrder, totals.totalWithOrder + cats.waitingToday.length + cats.waitingBacklog.length);
   parts.push(
     `BAO CAO TIEP NHAN - ${today}\n` +
+    `Tong lenh trong file Cyber: ${totalExcelOrders}\n` +
     `\n` +
-    `Xe vao hom nay:    ${totalIn}\n` +
-    `Da duoc len lenh:  ${totalWithOrder} (${convRate})\n` +
-    `Chua tiep nhan:    ${cats.notReceived.length}\n` +
-    `\n` +
-    `--- Chi tiet lenh ---\n` +
-    `[OK]  Xong + Thanh toan:   ${cats.doneAndPaid.length}\n` +
-    `[!!]  Xong + Chua TT:      ${cats.doneNotPaid.length}\n` +
-    `[SC]  Xuong + Dang sua:    ${cats.inWorkshopWorking.length}\n` +
-    `[CB]  Xuong + Da quyet toan: ${cats.inWorkshopPaid.length}`
+    `[NGAY] Vao hom nay + len lenh hom nay:  ${totals.totalSameDay}\n` +
+    `[TRE]  Vao truoc + hom nay moi len lenh: ${totals.totalBacklog}\n` +
+    `[CHO]  Vao hom nay, chua len lenh:       ${cats.waitingToday.length}\n` +
+    `[TON]  Vao truoc, van chua len lenh:     ${cats.waitingBacklog.length}`
   );
 
-  // ── Chua tiep nhan (uu tien hien thi dau) ──
-  if (cats.notReceived.length > 0) {
-    let block = `[--] CHUA DUOC TIEP NHAN (${cats.notReceived.length}):\n`;
-    block += `(Xe da vao xuong nhung chua co lenh sua trong Cyber)\n`;
-    for (const { tracking } of cats.notReceived) {
-      const timeStr = hoursLabel(tracking.timeIn, tz);
-      const status  = tracking.status === 'Dang trong xuong' ? 'Con trong xuong' : 'Da ra';
-      block += `\n${tracking.plate} - Vao: ${tracking.timeIn} (${timeStr}) - ${status}\n`;
+  // ── [NGAY] Vao hom nay + len lenh hom nay ──
+  const sameDayBlock = renderGroup('[NGAY] VAO HOM NAY + LEN LENH HOM NAY', cats.sameDay, tz);
+  if (sameDayBlock) parts.push(sameDayBlock);
+
+  // ── [TRE] Vao truoc + hom nay moi len lenh ──
+  const backlogBlock = renderGroup('[TRE] VAO NGAY TRUOC + HOM NAY MOI LEN LENH', cats.backlog, tz);
+  if (backlogBlock) parts.push(backlogBlock);
+
+  // ── [CHO] Vao hom nay, chua len lenh ──
+  if (cats.waitingToday.length > 0) {
+    let block = `[CHO] VAO HOM NAY, CHUA LEN LENH (${cats.waitingToday.length}):\n`;
+    block += `(Dang cho tiep nhan hoac chua dong y sua)\n`;
+    for (const { tracking } of cats.waitingToday) {
+      block += `\n${tracking.plate} - Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
     }
     parts.push(block);
   }
 
-  // ── Da ra + Da thanh toan ──
-  if (cats.doneAndPaid.length > 0) {
-    let block = `[OK] DA RA + DA THANH TOAN (${cats.doneAndPaid.length}):\n`;
-    for (const { order, tracking } of cats.doneAndPaid) {
-      block +=
-        `\n${order.plateRaw} - ${order.model}\n` +
-        `  KH: ${order.customer}\n` +
-        `  Vao: ${tracking.timeIn} | Ra: ${tracking.timeOut}\n` +
-        `  Lenh: ${order.workOrder}\n` +
-        `  Tong: ${formatMoney(order.total)} | ${order.status}\n`;
+  // ── [TON] Vao truoc, van chua len lenh ──
+  if (cats.waitingBacklog.length > 0) {
+    let block = `[TON] VAO NGAY TRUOC, VAN CHUA LEN LENH (${cats.waitingBacklog.length}):\n`;
+    block += `(Ton kho lau - can kiem tra lai)\n`;
+    for (const { tracking } of cats.waitingBacklog) {
+      block += `\n${tracking.plate} - Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
     }
     parts.push(block);
   }
 
-  // ── Da ra + Chua thanh toan ──
-  if (cats.doneNotPaid.length > 0) {
-    let block = `[!!] DA RA + CHUA THANH TOAN (${cats.doneNotPaid.length}):\n`;
-    for (const { order, tracking } of cats.doneNotPaid) {
+  // ── Co lenh nhung khong thay xe trong he thong ──
+  if (cats.noTracking.length > 0) {
+    let block = `[?] CO LENH NHUNG KHONG THAY XE VAO (${cats.noTracking.length}):\n`;
+    block += `(Bien so co the khac / chua chup anh luc vao)\n`;
+    for (const { order } of cats.noTracking) {
       block +=
         `\n${order.plateRaw} - ${order.model}\n` +
         `  KH: ${order.customer}\n` +
-        `  Vao: ${tracking.timeIn} | Ra: ${tracking.timeOut}\n` +
-        `  Lenh: ${order.workOrder}\n` +
-        `  Tong: ${formatMoney(order.total)} | ${order.status || 'Chua ro'}\n`;
-    }
-    parts.push(block);
-  }
-
-  // ── Con trong xuong + Dang sua ──
-  if (cats.inWorkshopWorking.length > 0) {
-    let block = `[SC] CON XUONG + DANG SUA (${cats.inWorkshopWorking.length}):\n`;
-    for (const { order, tracking } of cats.inWorkshopWorking) {
-      block +=
-        `\n${order.plateRaw} - ${order.model}\n` +
-        `  KH: ${order.customer}\n` +
-        `  Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n` +
-        `  YC: ${order.request || order.serviceType || '-'}\n` +
-        `  Lenh: ${order.workOrder}\n` +
-        `  Tong: ${formatMoney(order.total)} | ${order.status || 'Chua quyet toan'}\n`;
-    }
-    parts.push(block);
-  }
-
-  // ── Con trong xuong + Da quyet toan (bat thuong) ──
-  if (cats.inWorkshopPaid.length > 0) {
-    let block = `[CB] CON XUONG + DA QUYET TOAN - can kiem tra (${cats.inWorkshopPaid.length}):\n`;
-    for (const { order, tracking } of cats.inWorkshopPaid) {
-      block +=
-        `\n${order.plateRaw} - ${order.model}\n` +
-        `  KH: ${order.customer}\n` +
-        `  Vao: ${tracking.timeIn} | Chua ra (${hoursLabel(tracking.timeIn, tz)})\n` +
-        `  Lenh: ${order.workOrder}\n` +
-        `  Tong: ${formatMoney(order.total)} | ${order.status}\n`;
+        `  Lenh: ${order.workOrder} | Tong: ${formatMoney(order.total)}\n`;
     }
     parts.push(block);
   }
@@ -220,7 +265,6 @@ function buildMessages(cats, totalIn, totalWithOrder, totalExcelOrders, tz) {
 function splitIntoMessages(parts) {
   const messages = [];
   let current = '';
-
   for (const part of parts) {
     if (current.length + part.length + 2 > MAX_MSG_LEN) {
       if (current) messages.push(current.trim());
@@ -229,7 +273,6 @@ function splitIntoMessages(parts) {
       current += (current ? '\n\n' : '') + part;
     }
   }
-
   if (current) messages.push(current.trim());
   return messages;
 }
