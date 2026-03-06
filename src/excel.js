@@ -119,4 +119,4 @@ function parseExcelBuffer(buffer) {
   return orders;
 }
 
-module.exports = { downloadAndParseExcel, parseExcelBuffer, normalizePlate, getPaymentStatus };
+module.exports = { downloadAndParseExcel, normalizePlate };

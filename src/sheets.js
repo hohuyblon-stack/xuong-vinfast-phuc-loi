@@ -533,12 +533,10 @@ module.exports = {
   updateMainRow,
   getAllInWorkshop,
   getAllMainRows,
-  getTodayEntries,
   getDailySummary,
   getProductivityData,
   appendLogRow,
   updateLogResult,
   appendReviewRow,
   isMessageProcessed,
-  COLUMNS,
 };
