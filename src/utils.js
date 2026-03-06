@@ -101,10 +101,10 @@ function isValidVietnamPlate(plate) {
 /**
  * Cac lenh text-only (khong can anh).
  */
-const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP'];
+const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP', 'BAOCAO', 'NANGSUAT'];
 
 /**
- * Parse text tin nhan - chi nhan dang TONKHO va HELP.
+ * Parse text tin nhan - chi nhan dang TONKHO, HELP, BAOCAO, NANGSUAT.
  * Vao/Ra duoc tu dong xac dinh qua anh bien so.
  */
 function parseMessage(text) {
@@ -122,6 +122,10 @@ function parseMessage(text) {
     action = 'TONKHO';
   } else if (/^(HELP|HUONGDAN|HUONG DAN)$/.test(normalized)) {
     action = 'HELP';
+  } else if (/^(BAOCAO|BAO CAO)$/.test(normalized)) {
+    action = 'BAOCAO';
+  } else if (/^(NANGSUAT|NANG SUAT)$/.test(normalized)) {
+    action = 'NANGSUAT';
   }
 
   return { action, params: '' };
