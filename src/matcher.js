@@ -47,7 +47,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: 'Khong doc ro bien so.\nVui long chup lai anh ro hon, chup thang vao bien so.',
+      replyMessage: 'Không đọc được biển số trong ảnh.\nVui lòng chụp lại rõ hơn, chụp thẳng vào biển số nhé.',
       eventId,
     };
   }
@@ -64,7 +64,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: `Doc bien so khong chac chan: ${plate}\nVui long chup lai anh ro hon.`,
+      replyMessage: `Đọc biển số chưa chắc chắn: ${plate}\nVui lòng chụp lại ảnh rõ hơn nhé.`,
       eventId,
     };
   }
@@ -81,7 +81,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: `Bien so doc duoc (${plate}) khong dung dinh dang.\nVui long chup lai anh ro hon.`,
+      replyMessage: `Biển số đọc được (${plate}) không đúng định dạng.\nVui lòng chụp lại ảnh rõ hơn nhé.`,
       eventId,
     };
   }
@@ -122,7 +122,7 @@ async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
   logger.info('Vehicle IN processed', { vehicleId, plate });
   return {
     success: true,
-    replyMessage: `DA GHI VAO: ${plate}\nLuc: ${now}\nMa luot: ${vehicleId}`,
+    replyMessage: `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}\nLúc: ${now}\nMã lượt: ${vehicleId}`,
     eventId,
   };
 }
@@ -149,7 +149,7 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
 
   return {
     success: true,
-    replyMessage: `DA GHI RA: ${plate}\nLuc: ${now}\nThoi gian luu: ${durationStr}\nMa luot: ${match.data.vehicleId}`,
+    replyMessage: `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${match.data.vehicleId}`,
     eventId,
   };
 }
@@ -163,19 +163,19 @@ async function handleTonKho(config) {
   const vehicles = await sheets.getAllInWorkshop();
 
   if (vehicles.length === 0) {
-    return { replyMessage: 'TON KHO: Hien khong co xe nao trong xuong.' };
+    return { replyMessage: '🟢 Hiện không có xe nào trong xưởng.' };
   }
 
-  let msg = `TON KHO: ${vehicles.length} xe trong xuong\n`;
+  let msg = `🔧 Tồn kho: ${vehicles.length} xe đang trong xưởng\n`;
 
   for (const v of vehicles) {
     const hours = utils.hoursSince(v.timeIn, tz);
     const hStr = Math.floor(hours);
     const mStr = Math.round((hours % 1) * 60);
     let icon = '';
-    if (v.priority === 'Khan') icon = '[KHAN] ';
-    else if (v.priority === 'Canh bao') icon = '[CB] ';
-    msg += `\n${icon}${v.plate} - ${hStr}h${mStr}p - vao ${v.timeIn}`;
+    if (v.priority === 'Khan') icon = '🚨 ';
+    else if (v.priority === 'Canh bao') icon = '⚠️ ';
+    msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p — vào ${v.timeIn}`;
     if (v.note) msg += ` (${v.note})`;
   }
 
@@ -188,15 +188,15 @@ async function handleTonKho(config) {
 
 function handleHelp() {
   const msg =
-    `HUONG DAN SU DUNG\n` +
-    `\n--- Ghi nhan xe ---` +
-    `\nChup anh bien so → Gui (khong can ghi gi them)` +
-    `\n  Lan 1: Tu dong ghi XE VAO` +
-    `\n  Lan 2: Tu dong ghi XE RA + thoi gian luu` +
-    `\n\n--- Xem ton kho ---` +
-    `\nTONKHO = Xem xe dang trong xuong` +
-    `\n\n--- Khac ---` +
-    `\nHELP = Xem huong dan nay`;
+    `📋 Hướng dẫn sử dụng\n` +
+    `\n— Ghi nhận xe —` +
+    `\nChụp ảnh biển số → Gửi vào đây (không cần gõ gì thêm)` +
+    `\n  Lần 1: Tự động ghi xe VÀO xưởng` +
+    `\n  Lần 2: Tự động ghi xe RA + thời gian lưu` +
+    `\n\n— Xem tồn kho —` +
+    `\nTONKHO — Danh sách xe đang trong xưởng` +
+    `\n\n— Khác —` +
+    `\nHELP — Xem hướng dẫn này`;
 
   return { replyMessage: msg };
 }
@@ -236,10 +236,10 @@ async function checkTimeAlerts(config) {
       if (newPriority !== 'Binh thuong') {
         const hStr = Math.floor(hours);
         const mStr = Math.round((hours % 1) * 60);
-        const icon = newPriority === 'Khan' ? 'KHAN' : 'CANH BAO';
+        const icon = newPriority === 'Khan' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
         const alertMsg =
-          `[${icon}] Xe ${v.plate} da trong xuong ${hStr} gio ${mStr} phut.\n` +
-          `Vao luc: ${v.timeIn}\nMa luot: ${v.vehicleId}`;
+          `${icon} — Xe ${v.plate} đã trong xưởng ${hStr} giờ ${mStr} phút.\n` +
+          `Vào lúc: ${v.timeIn}\nMã lượt: ${v.vehicleId}`;
         notifyManagers(alertMsg, config).catch(err => {
           logger.error('Manager alert failed', { error: err.message });
         });
@@ -259,37 +259,37 @@ async function handleDailyReport(config) {
   const summary = await sheets.getDailySummary(tz);
   const avgStr = utils.formatDuration(summary.avgDuration);
 
-  let msg = `BAO CAO TONG HOP - ${summary.today}\n`;
-  msg += `\nXe vao hom nay: ${summary.totalIn}`;
-  msg += `\nXe ra hom nay: ${summary.totalOut}`;
-  msg += `\nDang trong xuong: ${summary.inWorkshop}`;
+  let msg = `📊 Báo cáo tổng hợp — ${summary.today}\n`;
+  msg += `\nXe vào hôm nay: ${summary.totalIn}`;
+  msg += `\nXe ra hôm nay: ${summary.totalOut}`;
+  msg += `\nĐang trong xưởng: ${summary.inWorkshop}`;
 
   if (summary.warningCount > 0) {
-    msg += `\nCanh bao (>24h): ${summary.warningCount}`;
+    msg += `\n⚠️ Cảnh báo (>24h): ${summary.warningCount}`;
   }
   if (summary.urgentCount > 0) {
-    msg += `\nKhan (>48h): ${summary.urgentCount}`;
+    msg += `\n🚨 Khẩn (>48h): ${summary.urgentCount}`;
   }
 
   if (summary.avgDuration > 0) {
-    msg += `\nTB thoi gian hoan thanh: ${avgStr}`;
+    msg += `\nTrung bình thời gian hoàn thành: ${avgStr}`;
   }
 
   if (summary.pendingReview > 0) {
-    msg += `\n\nCan kiem tra: ${summary.pendingReview} muc chua xu ly`;
+    msg += `\n\n⚠️ Cần kiểm tra: ${summary.pendingReview} mục chưa xử lý`;
   }
 
   const inWorkshop = await sheets.getAllInWorkshop();
   if (inWorkshop.length > 0) {
-    msg += `\n\nDANH SACH XE TRONG XUONG:`;
+    msg += `\n\nDanh sách xe đang trong xưởng:`;
     for (const v of inWorkshop) {
       const hours = utils.hoursSince(v.timeIn, tz);
       const hStr = Math.floor(hours);
       const mStr = Math.round((hours % 1) * 60);
       let icon = '';
-      if (v.priority === 'Khan') icon = '[KHAN] ';
-      else if (v.priority === 'Canh bao') icon = '[CB] ';
-      msg += `\n${icon}${v.plate} - ${hStr}h${mStr}p`;
+      if (v.priority === 'Khan') icon = '🚨 ';
+      else if (v.priority === 'Canh bao') icon = '⚠️ ';
+      msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
     }
   }
 
@@ -327,7 +327,7 @@ async function handleAccountingReport(fileUrl, config) {
 
   const orders = await downloadAndParseExcel(fileUrl);
   if (orders.length === 0) {
-    return { messages: ['File Excel khong co du lieu hop le. Vui long kiem tra lai.'] };
+    return { messages: ['File Excel không có dữ liệu hợp lệ. Vui lòng kiểm tra lại nhé.'] };
   }
 
   const messages = await generateAccountingReport(orders, config);

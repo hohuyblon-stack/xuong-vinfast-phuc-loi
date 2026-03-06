@@ -156,7 +156,7 @@ async function processMessageAsync(data) {
 
   // ═══ FILE EXCEL TU PHONG KE TOAN ═══
   if (documentFileId) {
-    await sendMessage(chatId, `Dang xu ly file: ${documentName}\nVui long cho...`);
+    await sendMessage(chatId, `⏳ Đang xử lý file: ${documentName}\nVui lòng chờ một chút...`);
     try {
       const fileUrl = await getFileUrl(documentFileId);
       const result = await handleAccountingReport(fileUrl, config);
@@ -165,7 +165,7 @@ async function processMessageAsync(data) {
       }
     } catch (err) {
       logger.error('Accounting report failed', { error: err.message, stack: err.stack });
-      await sendMessage(chatId, 'Loi khi xu ly file Excel. Vui long thu lai.');
+      await sendMessage(chatId, '❌ Có lỗi khi xử lý file Excel. Vui lòng thử lại nhé.');
     }
     return;
   }
@@ -188,9 +188,9 @@ async function processMessageAsync(data) {
   if (!imageFileId) {
     await sendMessage(
       chatId,
-      'Chup anh bien so xe va gui vao day.\n' +
-      'He thong se tu dong ghi VAO hoac RA.\n\n' +
-      'Go HELP de xem huong dan.'
+      'Chụp ảnh biển số xe và gửi vào đây nhé.\n' +
+      'Hệ thống sẽ tự động ghi xe vào hoặc ra xưởng.\n\n' +
+      'Gõ HELP để xem hướng dẫn.'
     );
     return;
   }

@@ -25,8 +25,8 @@ const logger = require('./logger');
 const MAX_MSG_LEN = 4000;
 
 function formatMoney(amount) {
-  if (!amount || isNaN(amount)) return '0d';
-  return Number(amount).toLocaleString('vi-VN') + 'd';
+  if (!amount || isNaN(amount)) return '0đ';
+  return Number(amount).toLocaleString('vi-VN') + 'đ';
 }
 
 function hoursLabel(timeIn, tz) {
@@ -165,15 +165,15 @@ async function generateAccountingReport(excelOrders, config) {
 
 function orderLine(order, tracking, tz) {
   const timeStr = tracking.timeOut
-    ? `Vao: ${tracking.timeIn} | Ra: ${tracking.timeOut}`
-    : `Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})`;
+    ? `Vào: ${tracking.timeIn} | Ra: ${tracking.timeOut}`
+    : `Vào: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})`;
 
   return (
-    `\n${order.plateRaw} - ${order.model}\n` +
-    `  KH: ${order.customer}\n` +
+    `\n${order.plateRaw} — ${order.model}\n` +
+    `  Khách: ${order.customer}\n` +
     `  ${timeStr}\n` +
-    `  Lenh: ${order.workOrder}\n` +
-    `  Tong: ${formatMoney(order.total)} | ${order.status || 'Chua quyet toan'}\n`
+    `  Lệnh: ${order.workOrder}\n` +
+    `  Tổng: ${formatMoney(order.total)} | ${order.status || 'Chưa quyết toán'}\n`
   );
 }
 
@@ -184,19 +184,19 @@ function renderGroup(title, group, tz) {
   let block = `${title} (${total}):\n`;
 
   if (group.doneAndPaid.length > 0) {
-    block += `\n-- Da ra, da thanh toan (${group.doneAndPaid.length}) --`;
+    block += `\n✅ Đã ra, đã thanh toán (${group.doneAndPaid.length})`;
     for (const { order, tracking } of group.doneAndPaid) block += orderLine(order, tracking, tz);
   }
   if (group.doneNotPaid.length > 0) {
-    block += `\n-- Da ra, CHUA thanh toan (${group.doneNotPaid.length}) --`;
+    block += `\n⚠️ Đã ra, chưa thanh toán (${group.doneNotPaid.length})`;
     for (const { order, tracking } of group.doneNotPaid) block += orderLine(order, tracking, tz);
   }
   if (group.inWorkshopWorking.length > 0) {
-    block += `\n-- Con trong xuong, dang sua (${group.inWorkshopWorking.length}) --`;
+    block += `\n🔧 Còn trong xưởng, đang sửa (${group.inWorkshopWorking.length})`;
     for (const { order, tracking } of group.inWorkshopWorking) block += orderLine(order, tracking, tz);
   }
   if (group.inWorkshopPaid.length > 0) {
-    block += `\n-- Con xuong + DA QUYET TOAN (can kiem tra) (${group.inWorkshopPaid.length}) --`;
+    block += `\n❗ Còn trong xưởng nhưng đã quyết toán — cần kiểm tra (${group.inWorkshopPaid.length})`;
     for (const { order, tracking } of group.inWorkshopPaid) block += orderLine(order, tracking, tz);
   }
 
@@ -209,52 +209,52 @@ function buildMessages(cats, totals, totalExcelOrders, today, tz) {
   // ── Header / Tong quan ──
   const convRate = pct(totals.totalWithOrder, totals.totalWithOrder + cats.waitingToday.length + cats.waitingBacklog.length);
   parts.push(
-    `BAO CAO TIEP NHAN - ${today}\n` +
-    `Tong lenh trong file Cyber: ${totalExcelOrders}\n` +
+    `📋 Báo cáo tiếp nhận — ${today}\n` +
+    `Tổng lệnh trong file Cyber: ${totalExcelOrders}\n` +
     `\n` +
-    `[NGAY] Vao hom nay + len lenh hom nay:  ${totals.totalSameDay}\n` +
-    `[TRE]  Vao truoc + hom nay moi len lenh: ${totals.totalBacklog}\n` +
-    `[CHO]  Vao hom nay, chua len lenh:       ${cats.waitingToday.length}\n` +
-    `[TON]  Vao truoc, van chua len lenh:     ${cats.waitingBacklog.length}`
+    `🟢 Vào & lên lệnh trong ngày:      ${totals.totalSameDay}\n` +
+    `🔵 Tồn kho cũ, hôm nay mới lên lệnh: ${totals.totalBacklog}\n` +
+    `🟡 Vào hôm nay, chưa lên lệnh:     ${cats.waitingToday.length}\n` +
+    `🔴 Tồn kho lâu, vẫn chưa lên lệnh: ${cats.waitingBacklog.length}`
   );
 
-  // ── [NGAY] Vao hom nay + len lenh hom nay ──
-  const sameDayBlock = renderGroup('[NGAY] VAO HOM NAY + LEN LENH HOM NAY', cats.sameDay, tz);
+  // 🟢 Vào hôm nay + lên lệnh hôm nay
+  const sameDayBlock = renderGroup('🟢 Vào & lên lệnh trong ngày', cats.sameDay, tz);
   if (sameDayBlock) parts.push(sameDayBlock);
 
-  // ── [TRE] Vao truoc + hom nay moi len lenh ──
-  const backlogBlock = renderGroup('[TRE] VAO NGAY TRUOC + HOM NAY MOI LEN LENH', cats.backlog, tz);
+  // 🔵 Vào ngày trước + hôm nay mới lên lệnh
+  const backlogBlock = renderGroup('🔵 Tồn kho cũ — hôm nay mới lên lệnh', cats.backlog, tz);
   if (backlogBlock) parts.push(backlogBlock);
 
-  // ── [CHO] Vao hom nay, chua len lenh ──
+  // 🟡 Vào hôm nay, chưa lên lệnh
   if (cats.waitingToday.length > 0) {
-    let block = `[CHO] VAO HOM NAY, CHUA LEN LENH (${cats.waitingToday.length}):\n`;
-    block += `(Dang cho tiep nhan hoac chua dong y sua)\n`;
+    let block = `🟡 Vào hôm nay, chưa lên lệnh (${cats.waitingToday.length}):\n`;
+    block += `(Đang chờ tiếp nhận hoặc khách chưa đồng ý sửa)\n`;
     for (const { tracking } of cats.waitingToday) {
-      block += `\n${tracking.plate} - Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
+      block += `\n${tracking.plate} — Vào: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
     }
     parts.push(block);
   }
 
-  // ── [TON] Vao truoc, van chua len lenh ──
+  // 🔴 Vào ngày trước, vẫn chưa lên lệnh
   if (cats.waitingBacklog.length > 0) {
-    let block = `[TON] VAO NGAY TRUOC, VAN CHUA LEN LENH (${cats.waitingBacklog.length}):\n`;
-    block += `(Ton kho lau - can kiem tra lai)\n`;
+    let block = `🔴 Tồn kho lâu — vẫn chưa lên lệnh (${cats.waitingBacklog.length}):\n`;
+    block += `(Cần kiểm tra lại)\n`;
     for (const { tracking } of cats.waitingBacklog) {
-      block += `\n${tracking.plate} - Vao: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
+      block += `\n${tracking.plate} — Vào: ${tracking.timeIn} (${hoursLabel(tracking.timeIn, tz)})\n`;
     }
     parts.push(block);
   }
 
-  // ── Co lenh nhung khong thay xe trong he thong ──
+  // ❓ Có lệnh nhưng không thấy xe vào
   if (cats.noTracking.length > 0) {
-    let block = `[?] CO LENH NHUNG KHONG THAY XE VAO (${cats.noTracking.length}):\n`;
-    block += `(Bien so co the khac / chua chup anh luc vao)\n`;
+    let block = `❓ Có lệnh nhưng không thấy xe vào (${cats.noTracking.length}):\n`;
+    block += `(Biển số có thể khác / chưa chụp ảnh lúc vào)\n`;
     for (const { order } of cats.noTracking) {
       block +=
-        `\n${order.plateRaw} - ${order.model}\n` +
-        `  KH: ${order.customer}\n` +
-        `  Lenh: ${order.workOrder} | Tong: ${formatMoney(order.total)}\n`;
+        `\n${order.plateRaw} — ${order.model}\n` +
+        `  Khách: ${order.customer}\n` +
+        `  Lệnh: ${order.workOrder} | Tổng: ${formatMoney(order.total)}\n`;
     }
     parts.push(block);
   }
