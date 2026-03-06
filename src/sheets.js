@@ -227,7 +227,7 @@ async function getAllMainRows() {
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (!row[1]) continue; // bo qua dong trong
+    if (!row[1]) continue;
     results.push({
       rowIndex: i + 1,
       vehicleId: row[0] || '',
@@ -241,6 +241,18 @@ async function getAllMainRows() {
     });
   }
   return results;
+}
+
+/**
+ * Lay cac xe VAO trong ngay hom nay (loc theo gio vao).
+ * Dung de tinh ty le chuyen doi xe vao → len lenh.
+ * @param {string} tz - timezone
+ */
+async function getTodayEntries(tz) {
+  const { DateTime } = require('luxon');
+  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
+  const all = await getAllMainRows();
+  return all.filter(r => r.timeIn && r.timeIn.startsWith(today));
 }
 
 /**
@@ -418,6 +430,7 @@ module.exports = {
   updateMainRow,
   getAllInWorkshop,
   getAllMainRows,
+  getTodayEntries,
   getDailySummary,
   appendLogRow,
   updateLogResult,
