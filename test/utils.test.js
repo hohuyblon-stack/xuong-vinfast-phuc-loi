@@ -62,38 +62,6 @@ describe('isValidVietnamPlate', () => {
 });
 
 // ──────────────────────────────────────────────
-// Test: parseMessage - VAO/RA
-// ──────────────────────────────────────────────
-
-describe('parseMessage - VAO/RA', () => {
-  it('nhan dien VAO', () => {
-    const r = parseMessage('VAO');
-    assert.equal(r.action, 'VAO');
-    assert.equal(r.params, '');
-  });
-
-  it('nhan dien vao (lowercase)', () => {
-    assert.equal(parseMessage('vao').action, 'VAO');
-  });
-
-  it('nhan dien RA', () => {
-    const r = parseMessage('RA');
-    assert.equal(r.action, 'RA');
-    assert.equal(r.params, '');
-  });
-
-  it('nhan dien ra (lowercase)', () => {
-    assert.equal(parseMessage('ra').action, 'RA');
-  });
-
-  it('tra null cho text khong co tu khoa', () => {
-    assert.equal(parseMessage('xin chao').action, null);
-    assert.equal(parseMessage('').action, null);
-    assert.equal(parseMessage(null).action, null);
-  });
-});
-
-// ──────────────────────────────────────────────
 // Test: parseMessage - TONKHO
 // ──────────────────────────────────────────────
 
@@ -109,30 +77,9 @@ describe('parseMessage - TONKHO', () => {
   it('nhan dien TON KHO (co dau cach)', () => {
     assert.equal(parseMessage('TON KHO').action, 'TONKHO');
   });
-});
 
-// ──────────────────────────────────────────────
-// Test: parseMessage - GHICHU
-// ──────────────────────────────────────────────
-
-describe('parseMessage - GHICHU', () => {
-  it('nhan dien GHICHU voi bien so va noi dung', () => {
-    const r = parseMessage('GHICHU 30A-12345 | Cho bao hiem');
-    assert.equal(r.action, 'GHICHU');
-    assert.ok(r.params.includes('30A-12345'));
-    assert.ok(r.params.includes('CHO BAO HIEM'));
-  });
-
-  it('nhan dien GHICHU khong co noi dung', () => {
-    const r = parseMessage('GHICHU 30A-12345');
-    assert.equal(r.action, 'GHICHU');
-    assert.equal(r.params, '30A-12345');
-  });
-
-  it('nhan dien GHI CHU (co dau cach)', () => {
-    const r = parseMessage('GHI CHU 30A-12345 | Ly do');
-    assert.equal(r.action, 'GHICHU');
-    assert.ok(r.params.includes('30A-12345'));
+  it('nhan dien "ton kho" voi dau tieng Viet', () => {
+    assert.equal(parseMessage('tồn kho').action, 'TONKHO');
   });
 });
 
@@ -156,6 +103,70 @@ describe('parseMessage - HELP', () => {
   it('nhan dien HUONG DAN (co dau cach)', () => {
     assert.equal(parseMessage('HUONG DAN').action, 'HELP');
   });
+
+  it('nhan dien "huong dan" voi dau tieng Viet', () => {
+    assert.equal(parseMessage('hướng dẫn').action, 'HELP');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Test: parseMessage - BAOCAO
+// ──────────────────────────────────────────────
+
+describe('parseMessage - BAOCAO', () => {
+  it('nhan dien BAOCAO', () => {
+    assert.equal(parseMessage('BAOCAO').action, 'BAOCAO');
+  });
+
+  it('nhan dien baocao (lowercase)', () => {
+    assert.equal(parseMessage('baocao').action, 'BAOCAO');
+  });
+
+  it('nhan dien BAO CAO (co dau cach)', () => {
+    assert.equal(parseMessage('BAO CAO').action, 'BAOCAO');
+  });
+
+  it('nhan dien "bao cao" voi dau tieng Viet (bug case)', () => {
+    assert.equal(parseMessage('báo cáo').action, 'BAOCAO');
+  });
+
+  it('nhan dien "Báo Cáo" mixed case voi dau', () => {
+    assert.equal(parseMessage('Báo Cáo').action, 'BAOCAO');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Test: parseMessage - NANGSUAT
+// ──────────────────────────────────────────────
+
+describe('parseMessage - NANGSUAT', () => {
+  it('nhan dien NANGSUAT', () => {
+    assert.equal(parseMessage('NANGSUAT').action, 'NANGSUAT');
+  });
+
+  it('nhan dien nangsuat (lowercase)', () => {
+    assert.equal(parseMessage('nangsuat').action, 'NANGSUAT');
+  });
+
+  it('nhan dien NANG SUAT (co dau cach)', () => {
+    assert.equal(parseMessage('NANG SUAT').action, 'NANGSUAT');
+  });
+
+  it('nhan dien "nang suat" voi dau tieng Viet', () => {
+    assert.equal(parseMessage('năng suất').action, 'NANGSUAT');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Test: parseMessage - unknown text
+// ──────────────────────────────────────────────
+
+describe('parseMessage - unknown', () => {
+  it('tra null cho text khong co tu khoa', () => {
+    assert.equal(parseMessage('xin chao').action, null);
+    assert.equal(parseMessage('').action, null);
+    assert.equal(parseMessage(null).action, null);
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -165,10 +176,9 @@ describe('parseMessage - HELP', () => {
 describe('TEXT_ONLY_ACTIONS', () => {
   it('chua dung cac command text-only', () => {
     assert.ok(TEXT_ONLY_ACTIONS.includes('TONKHO'));
-    assert.ok(TEXT_ONLY_ACTIONS.includes('GHICHU'));
     assert.ok(TEXT_ONLY_ACTIONS.includes('HELP'));
-    assert.ok(!TEXT_ONLY_ACTIONS.includes('VAO'));
-    assert.ok(!TEXT_ONLY_ACTIONS.includes('RA'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('BAOCAO'));
+    assert.ok(TEXT_ONLY_ACTIONS.includes('NANGSUAT'));
   });
 });
 
