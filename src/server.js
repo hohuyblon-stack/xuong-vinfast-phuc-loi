@@ -99,6 +99,20 @@ async function bootstrap() {
     }
   });
 
+  // Admin: debug sheet data (TEMPORARY)
+  app.get('/admin/debug-sheet', async (_req, res) => {
+    try {
+      const { getAllMainRows } = require('./sheets');
+      const rows = await getAllMainRows();
+      const sample = rows.slice(0, 5).map(r => ({
+        plate: r.plate, timeIn: r.timeIn, timeOut: r.timeOut, status: r.status,
+      }));
+      res.json({ totalRows: rows.length, sample, lastRow: rows.length > 0 ? rows[rows.length - 1] : null });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: trigger daily report
   app.post('/admin/daily-report', async (_req, res) => {
     try {
