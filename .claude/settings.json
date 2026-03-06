@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "command": "cd /tmp/vinfast-phuc-loi && node --test 'test/**/*.test.js' 2>&1 | tail -5"
+      }
+    ]
+  }
+}
