@@ -166,17 +166,34 @@ async function handleTonKho(config) {
     return { replyMessage: '🟢 Hiện không có xe nào trong xưởng.' };
   }
 
-  let msg = `🔧 Tồn kho: ${vehicles.length} xe đang trong xưởng\n`;
+  const urgent = [];
+  const warning = [];
+  const normal = [];
 
   for (const v of vehicles) {
     const hours = utils.hoursSince(v.timeIn, tz);
-    const hStr = Math.floor(hours);
-    const mStr = Math.round((hours % 1) * 60);
-    let icon = '';
-    if (v.priority === 'Khẩn') icon = '🚨 ';
-    else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
-    msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p — vào ${v.timeIn}`;
-    if (v.note) msg += ` (${v.note})`;
+    const line = `${v.plate} — ${utils.formatHours(hours)}`;
+
+    if (v.priority === 'Khẩn') urgent.push(line);
+    else if (v.priority === 'Cảnh báo') warning.push(line);
+    else normal.push(line);
+  }
+
+  let msg = `🔧 Tồn kho: ${vehicles.length} xe trong xưởng`;
+
+  if (urgent.length > 0) {
+    msg += `\n\n🚨 Khẩn — >48h (${urgent.length}):`;
+    for (const v of urgent) msg += `\n  ${v}`;
+  }
+
+  if (warning.length > 0) {
+    msg += `\n\n⚠️ Cảnh báo — >24h (${warning.length}):`;
+    for (const v of warning) msg += `\n  ${v}`;
+  }
+
+  if (normal.length > 0) {
+    msg += `\n\n🔧 Bình thường (${normal.length}):`;
+    for (const v of normal) msg += `\n  ${v}`;
   }
 
   return { replyMessage: msg };
@@ -237,11 +254,9 @@ async function checkTimeAlerts(config) {
       });
 
       if (newPriority !== 'Bình thường') {
-        const hStr = Math.floor(hours);
-        const mStr = Math.round((hours % 1) * 60);
         const icon = newPriority === 'Khẩn' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
         const alertMsg =
-          `${icon} — Xe ${v.plate} đã trong xưởng ${hStr} giờ ${mStr} phút.\n` +
+          `${icon} — Xe ${v.plate} đã trong xưởng ${utils.formatHours(hours)}.\n` +
           `Vào lúc: ${v.timeIn}\nMã lượt: ${v.vehicleId}`;
         notifyManagers(alertMsg, config).catch(err => {
           logger.error('Manager alert failed', { error: err.message });
@@ -251,6 +266,57 @@ async function checkTimeAlerts(config) {
   }
 
   return updated;
+}
+
+// ──────────────────────────────────────────────
+// Format danh sach xe trong xuong (compact)
+// ──────────────────────────────────────────────
+
+function formatWorkshopSummary(vehicles, tz) {
+  const urgent = [];
+  const warning = [];
+  const buckets = { '24-48h': 0, '12-24h': 0, '6-12h': 0, '<6h': 0 };
+
+  for (const v of vehicles) {
+    const hours = utils.hoursSince(v.timeIn, tz);
+    const label = `${v.plate} — ${utils.formatHours(hours)}`;
+
+    if (v.priority === 'Khẩn') {
+      urgent.push(label);
+    } else if (v.priority === 'Cảnh báo') {
+      warning.push(label);
+    } else if (hours >= 24) {
+      buckets['24-48h']++;
+    } else if (hours >= 12) {
+      buckets['12-24h']++;
+    } else if (hours >= 6) {
+      buckets['6-12h']++;
+    } else {
+      buckets['<6h']++;
+    }
+  }
+
+  let msg = '';
+
+  if (urgent.length > 0) {
+    msg += `\n\n🚨 Khẩn (>48h):`;
+    for (const v of urgent) msg += `\n  ${v}`;
+  }
+
+  if (warning.length > 0) {
+    msg += `\n\n⚠️ Cảnh báo (>24h):`;
+    for (const v of warning) msg += `\n  ${v}`;
+  }
+
+  const normalCount = vehicles.length - urgent.length - warning.length;
+  if (normalCount > 0) {
+    msg += `\n\n🔧 Xe còn lại (${normalCount}):`;
+    for (const [range, count] of Object.entries(buckets)) {
+      if (count > 0) msg += `\n  ${range}: ${count} xe`;
+    }
+  }
+
+  return msg;
 }
 
 // ──────────────────────────────────────────────
@@ -275,7 +341,7 @@ async function handleDailyReport(config) {
   }
 
   if (summary.avgDuration > 0) {
-    msg += `\nTrung bình thời gian hoàn thành: ${avgStr}`;
+    msg += `\nTB hoàn thành: ${avgStr}`;
   }
 
   if (summary.pendingReview > 0) {
@@ -284,17 +350,10 @@ async function handleDailyReport(config) {
 
   const inWorkshop = await sheets.getAllInWorkshop();
   if (inWorkshop.length > 0) {
-    msg += `\n\nDanh sách xe đang trong xưởng:`;
-    for (const v of inWorkshop) {
-      const hours = utils.hoursSince(v.timeIn, tz);
-      const hStr = Math.floor(hours);
-      const mStr = Math.round((hours % 1) * 60);
-      let icon = '';
-      if (v.priority === 'Khẩn') icon = '🚨 ';
-      else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
-      msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
-    }
+    msg += formatWorkshopSummary(inWorkshop, tz);
   }
+
+  msg += `\n\nGõ TONKHO để xem danh sách đầy đủ.`;
 
   return { replyMessage: msg };
 }
@@ -382,24 +441,15 @@ async function handleProductivityReport(config) {
 
   if (data.inWorkshop > 0) {
     const inWorkshop = await sheets.getAllInWorkshop();
-    msg += `\n\n🔧 Xe đang trong xưởng (${inWorkshop.length}):`;
-    for (const v of inWorkshop) {
-      const hours = utils.hoursSince(v.timeIn, tz);
-      const hStr = Math.floor(hours);
-      const mStr = Math.round((hours % 1) * 60);
-      let icon = '';
-      if (v.priority === 'Khẩn') icon = '🚨 ';
-      else if (v.priority === 'Cảnh báo') icon = '⚠️ ';
-      msg += `\n${icon}${v.plate} — ${hStr}h${mStr}p`;
-      if (v.note) msg += ` (${v.note})`;
-    }
+    msg += formatWorkshopSummary(inWorkshop, tz);
   }
 
   if (data.pendingReview > 0) {
     msg += `\n\n📋 Cần kiểm tra thủ công: ${data.pendingReview} mục`;
   }
 
-  msg += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  msg += `\n\nGõ TONKHO để xem danh sách đầy đủ.`;
+  msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   return { replyMessage: msg };
 }

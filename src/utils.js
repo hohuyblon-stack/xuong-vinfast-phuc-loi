@@ -54,6 +54,14 @@ function hoursSince(startStr, tz) {
   return DateTime.now().setZone(tz).diff(start, 'hours').hours;
 }
 
+/** Format so gio (float) thanh "Xh Yp", xu ly 60p → +1h */
+function formatHours(hours) {
+  let h = Math.floor(hours);
+  let m = Math.round((hours % 1) * 60);
+  if (m >= 60) { h += 1; m = 0; }
+  return `${h}h${m}p`;
+}
+
 /** Format so phut thanh chuoi "X gio Y phut" */
 function formatDuration(minutes) {
   if (!minutes && minutes !== 0) return '';
@@ -148,6 +156,7 @@ module.exports = {
   nowFormatted,
   calcMinutesBetween,
   hoursSince,
+  formatHours,
   formatDuration,
   normalizePlate,
   isValidVietnamPlate,

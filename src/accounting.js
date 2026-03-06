@@ -31,10 +31,7 @@ function formatMoney(amount) {
 
 function hoursLabel(timeIn, tz) {
   if (!timeIn) return '';
-  const hours = utils.hoursSince(timeIn, tz);
-  const h = Math.floor(hours);
-  const m = Math.round((hours % 1) * 60);
-  return `${h}h${m}p`;
+  return utils.formatHours(utils.hoursSince(timeIn, tz));
 }
 
 function pct(num, denom) {
