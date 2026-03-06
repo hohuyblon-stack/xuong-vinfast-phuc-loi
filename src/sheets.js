@@ -216,6 +216,34 @@ async function getAllInWorkshop() {
 }
 
 /**
+ * Lay tat ca dong trong DANH SACH CHINH (ca vao lan ra).
+ * Dung cho bao cao ke toan.
+ */
+async function getAllMainRows() {
+  const range = `'${tabNames.main}'!A:K`;
+  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
+  const rows = res.data.values || [];
+  const results = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row[1]) continue; // bo qua dong trong
+    results.push({
+      rowIndex: i + 1,
+      vehicleId: row[0] || '',
+      plate:     row[1] || '',
+      timeIn:    row[2] || '',
+      timeOut:   row[3] || '',
+      duration:  row[4] || '',
+      status:    row[7] || '',
+      priority:  row[8] || '',
+      note:      row[9] || '',
+    });
+  }
+  return results;
+}
+
+/**
  * Lay thong ke tong hop.
  */
 async function getDailySummary(tz) {
@@ -389,6 +417,7 @@ module.exports = {
   findMainRow,
   updateMainRow,
   getAllInWorkshop,
+  getAllMainRows,
   getDailySummary,
   appendLogRow,
   updateLogResult,

@@ -14,6 +14,7 @@ const {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  handleAccountingReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const logger = require('./logger');
@@ -151,7 +152,23 @@ async function bootstrap() {
 // ──────────────────────────────────────────────
 
 async function processMessageAsync(data) {
-  const { messageId, chatId, senderId, senderName, text, imageFileId } = data;
+  const { messageId, chatId, senderId, senderName, text, imageFileId, documentFileId, documentName } = data;
+
+  // ═══ FILE EXCEL TU PHONG KE TOAN ═══
+  if (documentFileId) {
+    await sendMessage(chatId, `Dang xu ly file: ${documentName}\nVui long cho...`);
+    try {
+      const fileUrl = await getFileUrl(documentFileId);
+      const result = await handleAccountingReport(fileUrl, config);
+      for (const msg of result.messages) {
+        await sendMessage(chatId, msg);
+      }
+    } catch (err) {
+      logger.error('Accounting report failed', { error: err.message, stack: err.stack });
+      await sendMessage(chatId, 'Loi khi xu ly file Excel. Vui long thu lai.');
+    }
+    return;
+  }
 
   // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP) ═══
   const parsed = parseMessage(text);

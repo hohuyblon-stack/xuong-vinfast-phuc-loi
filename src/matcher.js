@@ -317,6 +317,23 @@ async function notifyManagers(message, config) {
   logger.info('Notified managers', { count: chatIds.length });
 }
 
+// ──────────────────────────────────────────────
+// BAO CAO KE TOAN - xu ly file Excel tu phong ke toan
+// ──────────────────────────────────────────────
+
+async function handleAccountingReport(fileUrl, config) {
+  const { downloadAndParseExcel } = require('./excel');
+  const { generateAccountingReport } = require('./accounting');
+
+  const orders = await downloadAndParseExcel(fileUrl);
+  if (orders.length === 0) {
+    return { messages: ['File Excel khong co du lieu hop le. Vui long kiem tra lai.'] };
+  }
+
+  const messages = await generateAccountingReport(orders, config);
+  return { messages };
+}
+
 module.exports = {
   processVehicleEvent,
   checkTimeAlerts,
@@ -324,4 +341,5 @@ module.exports = {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  handleAccountingReport,
 };

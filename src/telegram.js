@@ -44,6 +44,24 @@ function extractUpdate(update) {
       imageFileId = message.photo[message.photo.length - 1].file_id;
     }
 
+    // Phat hien file Excel gui qua Telegram (tu phong ke toan)
+    let documentFileId = '';
+    let documentName = '';
+    if (message.document) {
+      const mime = message.document.mime_type || '';
+      const name = message.document.file_name || '';
+      const isExcel =
+        mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        mime === 'application/vnd.ms-excel' ||
+        name.endsWith('.xlsx') ||
+        name.endsWith('.xls');
+
+      if (isExcel) {
+        documentFileId = message.document.file_id;
+        documentName = name;
+      }
+    }
+
     return {
       messageId: String(message.message_id),
       chatId: String(chatId),
@@ -51,6 +69,8 @@ function extractUpdate(update) {
       senderName,
       text,
       imageFileId,
+      documentFileId,
+      documentName,
     };
   } catch (err) {
     logger.error('Failed to extract Telegram update', { error: err.message });
