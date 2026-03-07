@@ -23,7 +23,8 @@ const COLUMNS = {
   ],
   review: [
     'Mã lỗi', 'Mã sự kiện', 'Thời điểm', 'Ảnh', 'Biển số (AI đọc)',
-    'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú',
+    'Biển số (đúng)', 'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú',
+    'Người xử lý', 'Thời điểm xử lý', 'Liên kết lượt xe',
   ],
 };
 
@@ -295,12 +296,12 @@ async function getDailySummary(tz) {
     }
   }
 
-  const reviewRange = `'${tabNames.review}'!A:I`;
+  const reviewRange = `'${tabNames.review}'!A:M`;
   const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
   const reviewRows = reviewRes.data.values || [];
   let pendingReview = 0;
   for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
+    if (reviewRows[i][8] === 'Chưa xử lý') pendingReview++;
   }
 
   return {
@@ -388,12 +389,12 @@ async function getProductivityData(tz) {
     }
   }
 
-  const reviewRange = `'${tabNames.review}'!A:I`;
+  const reviewRange = `'${tabNames.review}'!A:M`;
   const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
   const reviewRows = reviewRes.data.values || [];
   let pendingReview = 0;
   for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][7] === 'Chưa xử lý') pendingReview++;
+    if (reviewRows[i][8] === 'Chưa xử lý') pendingReview++;
   }
 
   return {
@@ -477,15 +478,19 @@ async function appendReviewRow(row) {
     row.timestamp,
     row.imageUrl || '',
     row.plateAI || '',
+    row.correctedPlate || '',
     row.reason || '',
     row.suggestion || '',
     row.reviewStatus || 'Chưa xử lý',
     row.reviewNote || '',
+    row.reviewer || '',
+    row.resolvedAt || '',
+    row.linkedVehicleId || '',
   ]];
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.review}'!A:I`,
+    range: `'${tabNames.review}'!A:M`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
