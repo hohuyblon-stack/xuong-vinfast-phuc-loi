@@ -15,7 +15,6 @@ const {
   handleDailyReport,
   sendScheduledDailyReport,
   handleProductivityReport,
-  sendScheduledProductivityReport,
   handleAccountingReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');

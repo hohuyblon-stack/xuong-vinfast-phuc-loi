@@ -245,18 +245,6 @@ async function getAllMainRows() {
 }
 
 /**
- * Lay cac xe VAO trong ngay hom nay (loc theo gio vao).
- * Dung de tinh ty le chuyen doi xe vao → len lenh.
- * @param {string} tz - timezone
- */
-async function getTodayEntries(tz) {
-  const { DateTime } = require('luxon');
-  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
-  const all = await getAllMainRows();
-  return all.filter(r => r.timeIn && r.timeIn.startsWith(today));
-}
-
-/**
  * Lay thong ke tong hop.
  */
 async function getDailySummary(tz) {
