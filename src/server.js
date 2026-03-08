@@ -30,23 +30,16 @@ let config;
 async function bootstrap() {
   config = loadConfig();
 
-  // Init Supabase (source of truth)
+  // Init Supabase (source of truth) — synchronous
   initDb(config);
 
-  // Init Google Sheets (async mirror — non-fatal, Supabase is source of truth)
-  try {
-    await initSheets(config.sheets);
-  } catch (err) {
-    logger.warn('Google Sheets init failed — mirror disabled', { error: err.message });
-  }
-
-  // Init OCR
+  // Init OCR — synchronous
   initOcr(config.ocr.credentials);
 
-  // Init Telegram Bot
+  // Init Telegram Bot — synchronous
   initTelegram(config.telegram.botToken);
 
-  // Start Express
+  // Start Express immediately so Render health check passes
   const app = express();
   app.use(express.json());
 
@@ -138,6 +131,11 @@ async function bootstrap() {
     if (config.manager.chatIds.length > 0) {
       logger.info(`Manager chat IDs configured: ${config.manager.chatIds.length}`);
     }
+
+    // Init Google Sheets mirror in background — non-fatal, Supabase is source of truth
+    initSheets(config.sheets).catch(err => {
+      logger.warn('Google Sheets init failed — mirror disabled', { error: err.message });
+    });
   });
 
   // Check alerts moi 30 phut
