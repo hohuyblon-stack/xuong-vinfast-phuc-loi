@@ -1,8 +1,29 @@
 'use strict';
 
+const { DateTime } = require('luxon');
 const sheets = require('./sheets');
 const utils = require('./utils');
 const logger = require('./logger');
+
+// ──────────────────────────────────────────────
+// Per-plate processing lock
+// Serializes concurrent events for the same plate so burst photos
+// (camera sends 2 frames in quick succession) don't cause phantom RA.
+// ──────────────────────────────────────────────
+
+const plateLocks = new Map();
+
+function withPlateLock(plate, fn) {
+  const prev = plateLocks.get(plate) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  plateLocks.set(plate, next);
+  next.finally(() => {
+    if (plateLocks.get(plate) === next) {
+      plateLocks.delete(plate);
+    }
+  });
+  return next;
+}
 
 /**
  * Xu ly 1 su kien xe vao/ra.
@@ -87,14 +108,18 @@ async function processVehicleEvent(event, config) {
   }
 
   // Buoc 3: Tu dong xac dinh VAO hay RA
-  // Neu bien so dang trong xuong → RA, nguoc lai → VAO
-  const existing = await sheets.findMainRow(plate, 'Đang trong xưởng');
-
-  if (existing) {
-    return await handleVehicleOut(eventId, plate, imageUrl, now, config, existing);
-  } else {
-    return await handleVehicleIn(eventId, plate, imageUrl, now, config);
-  }
+  // Serialize per plate to prevent burst-photo race conditions:
+  // two frames of the same car arriving within seconds would both get
+  // different messageIds and both pass the idempotency check, causing
+  // the second photo to instantly trigger RA right after the first VAO.
+  return await withPlateLock(plate, async () => {
+    const existing = await sheets.findMainRow(plate, 'Đang trong xưởng');
+    if (existing) {
+      return await handleVehicleOut(eventId, plate, imageUrl, now, config, existing);
+    } else {
+      return await handleVehicleIn(eventId, plate, imageUrl, now, config);
+    }
+  });
 }
 
 /**
@@ -127,10 +152,32 @@ async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
   };
 }
 
+// Minimum seconds a car must be in the workshop before RA is allowed.
+// Prevents a burst/duplicate photo (taken 1-5s after the first) from
+// triggering an immediate RA. Tune via config if needed.
+const MIN_STAY_SECONDS = 60;
+
 /**
  * Xu ly Xe ra (nhan existing record tu processVehicleEvent).
  */
 async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
+  // Guard: if car entered < MIN_STAY_SECONDS ago, this is almost certainly
+  // a duplicate burst capture — acknowledge the VAO instead of creating RA.
+  const fmt = 'dd/MM/yyyy HH:mm:ss';
+  const timeIn = DateTime.fromFormat(match.data.timeIn, fmt, { zone: config.timezone });
+  const timeNow = DateTime.fromFormat(now, fmt, { zone: config.timezone });
+  const secondsInWorkshop = timeNow.diff(timeIn, 'seconds').seconds;
+
+  if (secondsInWorkshop < MIN_STAY_SECONDS) {
+    await sheets.updateLogResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
+    logger.info('Duplicate capture ignored - car just entered', { plate, secondsInWorkshop: Math.round(secondsInWorkshop) });
+    return {
+      success: true,
+      replyMessage: `ℹ️ Xe ${plate} đã được ghi nhận VÀO lúc ${match.data.timeIn}\nMã lượt: ${match.data.vehicleId}`,
+      eventId,
+    };
+  }
+
   const duration = utils.calcMinutesBetween(match.data.timeIn, now);
 
   await sheets.updateMainRow(match.rowIndex, {
