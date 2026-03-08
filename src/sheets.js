@@ -524,12 +524,8 @@ module.exports = {
   appendMainRow,
   findMainRow,
   updateMainRow,
-  getAllInWorkshop,
   getAllMainRows,
-  getDailySummary,
-  getProductivityData,
   appendLogRow,
   updateLogResult,
   appendReviewRow,
-  isMessageProcessed,
 };
