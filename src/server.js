@@ -33,8 +33,12 @@ async function bootstrap() {
   // Init Supabase (source of truth)
   initDb(config);
 
-  // Init Google Sheets (async mirror)
-  await initSheets(config.sheets);
+  // Init Google Sheets (async mirror — non-fatal, Supabase is source of truth)
+  try {
+    await initSheets(config.sheets);
+  } catch (err) {
+    logger.warn('Google Sheets init failed — mirror disabled', { error: err.message });
+  }
 
   // Init OCR
   initOcr(config.ocr.credentials);
