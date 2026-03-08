@@ -5,7 +5,8 @@ require('dotenv/config');
 const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
-const { initSheets, isMessageProcessed } = require('./sheets');
+const { initSheets } = require('./sheets');
+const { initDb, isMessageProcessed } = require('./db');
 const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
 const {
   processVehicleEvent,
@@ -29,7 +30,10 @@ let config;
 async function bootstrap() {
   config = loadConfig();
 
-  // Init Google Sheets
+  // Init Supabase (source of truth)
+  initDb(config);
+
+  // Init Google Sheets (async mirror)
   await initSheets(config.sheets);
 
   // Init OCR

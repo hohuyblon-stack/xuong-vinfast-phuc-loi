@@ -62,6 +62,12 @@ function loadConfig() {
       dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
     },
 
+    // Supabase (PostgreSQL — source of truth)
+    supabase: {
+      url:        requireEnv('SUPABASE_URL'),
+      serviceKey: requireEnv('SUPABASE_SERVICE_KEY'),
+    },
+
     // Timezone
     timezone: optionalEnv('TIMEZONE', 'Asia/Ho_Chi_Minh'),
   };

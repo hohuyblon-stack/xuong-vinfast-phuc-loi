@@ -1,70 +1,71 @@
 'use strict';
 
 const { DateTime } = require('luxon');
-const sheets = require('./sheets');
-const utils = require('./utils');
-const logger = require('./logger');
-
-// ──────────────────────────────────────────────
-// Per-plate processing lock
-// Serializes concurrent events for the same plate so burst photos
-// (camera sends 2 frames in quick succession) don't cause phantom RA.
-// ──────────────────────────────────────────────
-
-const plateLocks = new Map();
-
-function withPlateLock(plate, fn) {
-  const prev = plateLocks.get(plate) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(fn);
-  plateLocks.set(plate, next);
-  next.finally(() => {
-    if (plateLocks.get(plate) === next) {
-      plateLocks.delete(plate);
-    }
-  });
-  return next;
-}
+const db         = require('./db');
+const sheetsSync = require('./sheets-sync');
+const utils      = require('./utils');
+const logger     = require('./logger');
 
 /**
  * Xu ly 1 su kien xe vao/ra.
- * Tu dong xac dinh VAO hay RA dua vao trang thai bien so trong Sheets.
+ *
+ * Race-condition-free: the DB's process_vehicle() RPC uses SELECT FOR UPDATE
+ * to serialize concurrent burst photos for the same plate at the PostgreSQL
+ * level. No in-process mutex needed.
  */
 async function processVehicleEvent(event, config) {
-  const tz = config.timezone;
-  const now = utils.nowFormatted(tz);
-  const eventId = utils.generateEventId(tz);
+  const tz  = config.timezone;
+  const now = utils.nowFormatted(tz);       // dd/MM/yyyy HH:mm:ss  (for display + Sheets)
+  const nowIso = new Date().toISOString();  // UTC ISO               (for DB)
 
-  const { messageId, senderId, senderName, text, imageUrl, ocrResult } = event;
-  const plate = ocrResult.plateText;
+  const eventId   = utils.generateEventId(tz);
+  const vehicleId = utils.generateVehicleId(tz);
+
+  const { messageId, senderId, senderName, imageUrl, ocrResult } = event;
+  const plate      = ocrResult.plateText;
   const confidence = ocrResult.confidence;
-  const confLabel = utils.confidenceLabel(confidence, config.ocr);
+  const confLabel  = utils.confidenceLabel(confidence, config.ocr);
+  const messageKey = `[MSG_ID:${messageId}]`;
 
-  // Buoc 1: Luon ghi NHAT KY truoc
-  const originalMessage = `[MSG_ID:${messageId}]`;
-
-  await sheets.appendLogRow({
+  // ── Step 1: Always record in NHẬT KÝ first ──────────────────────────────
+  await db.insertEvent({
     eventId,
-    timestamp: now,
-    recordType: 'Chưa xác định',
-    plateAI: plate,
-    confidenceLabel: confLabel,
+    timestamp:        nowIso,
+    recordType:       'Chưa xác định',
+    plateAI:          plate,
+    confidenceLabel:  confLabel,
     imageUrl,
-    sender: senderName || senderId,
-    originalMessage,
-    result: '',
+    sender:           senderName || senderId,
+    messageKey,
+    result:           '',
   });
 
-  // Buoc 2: Kiem tra cac case loi anh/OCR
+  // Mirror to Sheets asynchronously (fire-and-forget)
+  sheetsSync.syncLogInsert({
+    eventId,
+    timestamp:        now,   // Sheets stores formatted string
+    recordType:       'Chưa xác định',
+    plateAI:          plate,
+    confidenceLabel:  confLabel,
+    imageUrl,
+    sender:           senderName || senderId,
+    originalMessage:  messageKey,
+    result:           '',
+  });
+
+  // ── Step 2: Validate OCR result ─────────────────────────────────────────
 
   if (!plate) {
     const errorId = utils.generateErrorId(tz);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: '',
-      reason: 'Anh mo / khong thay bien so',
-      suggestion: 'Chup lai anh',
+    await db.insertReview({
+      errorId, eventId, timestamp: nowIso, imageUrl, plateAI: '',
+      reason:       'Anh mo / khong thay bien so',
+      suggestion:   'Chup lai anh',
       reviewStatus: 'Chưa xử lý',
     });
-    await sheets.updateLogResult(eventId, 'Khong doc duoc bien so');
+    await db.updateEventResult(eventId, 'Khong doc duoc bien so');
+    sheetsSync.syncReviewInsert({ errorId, eventId, timestamp: now, imageUrl, plateAI: '', reason: 'Anh mo / khong thay bien so', suggestion: 'Chup lai anh', reviewStatus: 'Chưa xử lý' });
+    sheetsSync.syncLogResult(eventId, 'Khong doc duoc bien so');
 
     return {
       success: false,
@@ -75,13 +76,15 @@ async function processVehicleEvent(event, config) {
 
   if (confidence < config.ocr.confidenceMedium) {
     const errorId = utils.generateErrorId(tz);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
-      reason: 'OCR doc khong chac',
-      suggestion: 'Chup lai anh',
+    await db.insertReview({
+      errorId, eventId, timestamp: nowIso, imageUrl, plateAI: plate,
+      reason:       'OCR doc khong chac',
+      suggestion:   'Chup lai anh',
       reviewStatus: 'Chưa xử lý',
     });
-    await sheets.updateLogResult(eventId, 'OCR mo - chuyen kiem tra');
+    await db.updateEventResult(eventId, 'OCR mo - chuyen kiem tra');
+    sheetsSync.syncReviewInsert({ errorId, eventId, timestamp: now, imageUrl, plateAI: plate, reason: 'OCR doc khong chac', suggestion: 'Chup lai anh', reviewStatus: 'Chưa xử lý' });
+    sheetsSync.syncLogResult(eventId, 'OCR mo - chuyen kiem tra');
 
     return {
       success: false,
@@ -92,13 +95,15 @@ async function processVehicleEvent(event, config) {
 
   if (!utils.isValidVietnamPlate(plate)) {
     const errorId = utils.generateErrorId(tz);
-    await sheets.appendReviewRow({
-      errorId, eventId, timestamp: now, imageUrl, plateAI: plate,
-      reason: 'Bien so khong dung dinh dang',
-      suggestion: 'Chup lai anh',
+    await db.insertReview({
+      errorId, eventId, timestamp: nowIso, imageUrl, plateAI: plate,
+      reason:       'Bien so khong dung dinh dang',
+      suggestion:   'Chup lai anh',
       reviewStatus: 'Chưa xử lý',
     });
-    await sheets.updateLogResult(eventId, 'Bien so sai format');
+    await db.updateEventResult(eventId, 'Bien so sai format');
+    sheetsSync.syncReviewInsert({ errorId, eventId, timestamp: now, imageUrl, plateAI: plate, reason: 'Bien so khong dung dinh dang', suggestion: 'Chup lai anh', reviewStatus: 'Chưa xử lý' });
+    sheetsSync.syncLogResult(eventId, 'Bien so sai format');
 
     return {
       success: false,
@@ -107,96 +112,69 @@ async function processVehicleEvent(event, config) {
     };
   }
 
-  // Buoc 3: Tu dong xac dinh VAO hay RA
-  // Serialize per plate to prevent burst-photo race conditions:
-  // two frames of the same car arriving within seconds would both get
-  // different messageIds and both pass the idempotency check, causing
-  // the second photo to instantly trigger RA right after the first VAO.
-  return await withPlateLock(plate, async () => {
-    const existing = await sheets.findMainRow(plate, 'Đang trong xưởng');
-    if (existing) {
-      return await handleVehicleOut(eventId, plate, imageUrl, now, config, existing);
-    } else {
-      return await handleVehicleIn(eventId, plate, imageUrl, now, config);
-    }
-  });
-}
+  // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
 
-/**
- * Xu ly Xe vao (biet truoc bien so chua co trong xuong).
- */
-async function handleVehicleIn(eventId, plate, imageUrl, now, config) {
-  const vehicleId = utils.generateVehicleId(config.timezone);
+  const decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl);
 
-  await sheets.appendMainRow({
-    vehicleId,
-    plate,
-    timeIn: now,
-    timeOut: '',
-    duration: '',
-    imageIn: imageUrl,
-    imageOut: '',
-    status: 'Đang trong xưởng',
-    priority: 'Bình thường',
-    note: '',
-    updatedAt: now,
-  });
+  if (decision.action === 'VAO') {
+    await db.updateEventResult(eventId, 'Da ghi VAO danh sach');
+    sheetsSync.syncLogResult(eventId, 'Da ghi VAO danh sach');
+    sheetsSync.syncVehicleIn({
+      vehicleId: decision.vehicle_id,
+      plate,
+      timeIn:    now,
+      timeOut:   '',
+      duration:  '',
+      imageIn:   imageUrl,
+      imageOut:  '',
+      status:    'Đang trong xưởng',
+      priority:  'Bình thường',
+      note:      '',
+      updatedAt: now,
+    });
 
-  await sheets.updateLogResult(eventId, 'Da ghi VAO danh sach');
-
-  logger.info('Vehicle IN processed', { vehicleId, plate });
-  return {
-    success: true,
-    replyMessage: `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}\nLúc: ${now}\nMã lượt: ${vehicleId}`,
-    eventId,
-  };
-}
-
-// Minimum seconds a car must be in the workshop before RA is allowed.
-// Prevents a burst/duplicate photo (taken 1-5s after the first) from
-// triggering an immediate RA. Tune via config if needed.
-const MIN_STAY_SECONDS = 60;
-
-/**
- * Xu ly Xe ra (nhan existing record tu processVehicleEvent).
- */
-async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
-  // Guard: if car entered < MIN_STAY_SECONDS ago, this is almost certainly
-  // a duplicate burst capture — acknowledge the VAO instead of creating RA.
-  const fmt = 'dd/MM/yyyy HH:mm:ss';
-  const timeIn = DateTime.fromFormat(match.data.timeIn, fmt, { zone: config.timezone });
-  const timeNow = DateTime.fromFormat(now, fmt, { zone: config.timezone });
-  const secondsInWorkshop = timeNow.diff(timeIn, 'seconds').seconds;
-
-  if (secondsInWorkshop < MIN_STAY_SECONDS) {
-    await sheets.updateLogResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
-    logger.info('Duplicate capture ignored - car just entered', { plate, secondsInWorkshop: Math.round(secondsInWorkshop) });
+    logger.info('Vehicle IN processed', { vehicleId: decision.vehicle_id, plate });
     return {
       success: true,
-      replyMessage: `ℹ️ Xe ${plate} đã được ghi nhận VÀO lúc ${match.data.timeIn}\nMã lượt: ${match.data.vehicleId}`,
+      replyMessage: `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}\nLúc: ${now}\nMã lượt: ${decision.vehicle_id}`,
       eventId,
     };
   }
 
-  const duration = utils.calcMinutesBetween(match.data.timeIn, now);
+  if (decision.action === 'RA_DUPLICATE') {
+    await db.updateEventResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
+    sheetsSync.syncLogResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
 
-  await sheets.updateMainRow(match.rowIndex, {
-    timeOut: now,
-    duration: duration.toString(),
-    imageOut: imageUrl,
-    status: 'Đã ra xưởng',
-    priority: 'Bình thường',
+    const timeInFormatted = fmtIso(decision.time_in_ts, tz);
+    logger.info('Duplicate capture ignored - car just entered', {
+      plate, secondsInWorkshop: Math.round(decision.seconds_in),
+    });
+    return {
+      success: true,
+      replyMessage: `ℹ️ Xe ${plate} đã được ghi nhận VÀO lúc ${timeInFormatted}\nMã lượt: ${decision.vehicle_id}`,
+      eventId,
+    };
+  }
+
+  // RA — update is already committed in the RPC
+  const duration    = Math.round(decision.seconds_in / 60);
+  const durationStr = utils.formatDuration(duration);
+
+  await db.updateEventResult(eventId, 'Da ghep cap thanh cong');
+  sheetsSync.syncLogResult(eventId, 'Da ghep cap thanh cong');
+  sheetsSync.syncVehicleOut(plate, decision.vehicle_id, {
+    timeOut:   now,
+    duration:  String(duration),
+    imageOut:  imageUrl,
+    status:    'Đã ra xưởng',
+    priority:  'Bình thường',
     updatedAt: now,
   });
 
-  await sheets.updateLogResult(eventId, 'Da ghep cap thanh cong');
-
-  const durationStr = utils.formatDuration(duration);
-  logger.info('Vehicle OUT processed', { vehicleId: match.data.vehicleId, plate, duration });
-
+  logger.info('Vehicle OUT processed', { vehicleId: decision.vehicle_id, plate, duration });
   return {
     success: true,
-    replyMessage: `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${match.data.vehicleId}`,
+    replyMessage: `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${decision.vehicle_id}`,
     eventId,
   };
 }
@@ -206,24 +184,24 @@ async function handleVehicleOut(eventId, plate, imageUrl, now, config, match) {
 // ──────────────────────────────────────────────
 
 async function handleTonKho(config) {
-  const tz = config.timezone;
-  const vehicles = await sheets.getAllInWorkshop();
+  const tz       = config.timezone;
+  const vehicles = await db.getAllInWorkshop(tz);
 
   if (vehicles.length === 0) {
     return { replyMessage: '🟢 Hiện không có xe nào trong xưởng.' };
   }
 
-  const urgent = [];
+  const urgent  = [];
   const warning = [];
-  const normal = [];
+  const normal  = [];
 
   for (const v of vehicles) {
     const hours = utils.hoursSince(v.timeIn, tz);
-    const line = `${v.plate} — ${utils.formatHours(hours)}`;
+    const line  = `${v.plate} — ${utils.formatHours(hours)}`;
 
-    if (v.priority === 'Khẩn') urgent.push(line);
+    if (v.priority === 'Khẩn')       urgent.push(line);
     else if (v.priority === 'Cảnh báo') warning.push(line);
-    else normal.push(line);
+    else                               normal.push(line);
   }
 
   let msg = `🔧 Tồn kho: ${vehicles.length} xe trong xưởng`;
@@ -232,12 +210,10 @@ async function handleTonKho(config) {
     msg += `\n\n🚨 Khẩn — >48h (${urgent.length}):`;
     for (const v of urgent) msg += `\n  ${v}`;
   }
-
   if (warning.length > 0) {
     msg += `\n\n⚠️ Cảnh báo — >24h (${warning.length}):`;
     for (const v of warning) msg += `\n  ${v}`;
   }
-
   if (normal.length > 0) {
     msg += `\n\n🔧 Bình thường (${normal.length}):`;
     for (const v of normal) msg += `\n  ${v}`;
@@ -273,35 +249,31 @@ function handleHelp() {
 // ──────────────────────────────────────────────
 
 async function checkTimeAlerts(config) {
-  const tz = config.timezone;
-  const vehicles = await sheets.getAllInWorkshop();
-  let updated = 0;
+  const tz       = config.timezone;
+  const nowIso   = new Date().toISOString();
+  const now      = utils.nowFormatted(tz);
+  const vehicles = await db.getAllInWorkshop(tz);
+  let updated    = 0;
 
   for (const v of vehicles) {
-    const hours = utils.hoursSince(v.timeIn, tz);
-    let newPriority = 'Bình thường';
+    const hours      = utils.hoursSince(v.timeIn, tz);
+    let newPriority  = 'Bình thường';
 
-    if (hours >= config.alerts.urgentHours) {
-      newPriority = 'Khẩn';
-    } else if (hours >= config.alerts.warningHours) {
-      newPriority = 'Cảnh báo';
-    }
+    if (hours >= config.alerts.urgentHours)       newPriority = 'Khẩn';
+    else if (hours >= config.alerts.warningHours) newPriority = 'Cảnh báo';
 
     if (newPriority !== v.priority) {
-      await sheets.updateMainRow(v.rowIndex, {
-        priority: newPriority,
-        updatedAt: utils.nowFormatted(tz),
-      });
+      await db.updateVehiclePriority(v.vehicleId, newPriority, nowIso);
+      sheetsSync.syncVehiclePriority(v.plate, newPriority, now);
       updated++;
+
       logger.info('Alert level changed', {
-        plate: v.plate,
-        vehicleId: v.vehicleId,
-        hours: Math.round(hours * 10) / 10,
-        newPriority,
+        plate: v.plate, vehicleId: v.vehicleId,
+        hours: Math.round(hours * 10) / 10, newPriority,
       });
 
       if (newPriority !== 'Bình thường') {
-        const icon = newPriority === 'Khẩn' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
+        const icon     = newPriority === 'Khẩn' ? '🚨 Khẩn' : '⚠️ Cảnh báo';
         const alertMsg =
           `${icon} — Xe ${v.plate} đã trong xưởng ${utils.formatHours(hours)}.\n` +
           `Vào lúc: ${v.timeIn}\nMã lượt: ${v.vehicleId}`;
@@ -320,7 +292,7 @@ async function checkTimeAlerts(config) {
 // ──────────────────────────────────────────────
 
 function formatWorkshopSummary(vehicles, tz) {
-  const urgent = [];
+  const urgent  = [];
   const warning = [];
   const buckets = { '24-48h': 0, '12-24h': 0, '6-12h': 0, '<6h': 0 };
 
@@ -332,15 +304,10 @@ function formatWorkshopSummary(vehicles, tz) {
       urgent.push(label);
     } else if (v.priority === 'Cảnh báo') {
       warning.push(label);
-    } else if (hours >= 24) {
-      buckets['24-48h']++;
-    } else if (hours >= 12) {
-      buckets['12-24h']++;
-    } else if (hours >= 6) {
-      buckets['6-12h']++;
-    } else {
-      buckets['<6h']++;
-    }
+    } else if (hours >= 24)      buckets['24-48h']++;
+    else if (hours >= 12) buckets['12-24h']++;
+    else if (hours >= 6)  buckets['6-12h']++;
+    else                  buckets['<6h']++;
   }
 
   let msg = '';
@@ -349,7 +316,6 @@ function formatWorkshopSummary(vehicles, tz) {
     msg += `\n\n🚨 Khẩn (>48h):`;
     for (const v of urgent) msg += `\n  ${v}`;
   }
-
   if (warning.length > 0) {
     msg += `\n\n⚠️ Cảnh báo (>24h):`;
     for (const v of warning) msg += `\n  ${v}`;
@@ -371,37 +337,26 @@ function formatWorkshopSummary(vehicles, tz) {
 // ──────────────────────────────────────────────
 
 async function handleDailyReport(config) {
-  const tz = config.timezone;
-  const summary = await sheets.getDailySummary(tz);
-  const avgStr = utils.formatDuration(summary.avgDuration);
+  const tz      = config.timezone;
+  const summary = await db.getDailySummary(tz);
+  const avgStr  = utils.formatDuration(summary.avgDuration);
 
   let msg = `📊 Báo cáo tổng hợp — ${summary.today}\n`;
   msg += `\nXe vào hôm nay: ${summary.totalIn}`;
   msg += `\nXe ra hôm nay: ${summary.totalOut}`;
   msg += `\nĐang trong xưởng: ${summary.inWorkshop}`;
 
-  if (summary.warningCount > 0) {
-    msg += `\n⚠️ Cảnh báo (>24h): ${summary.warningCount}`;
-  }
-  if (summary.urgentCount > 0) {
-    msg += `\n🚨 Khẩn (>48h): ${summary.urgentCount}`;
-  }
+  if (summary.warningCount > 0) msg += `\n⚠️ Cảnh báo (>24h): ${summary.warningCount}`;
+  if (summary.urgentCount > 0)  msg += `\n🚨 Khẩn (>48h): ${summary.urgentCount}`;
+  if (summary.avgDuration > 0)  msg += `\nTB hoàn thành: ${avgStr}`;
+  if (summary.pendingReview > 0) msg += `\n\n⚠️ Cần kiểm tra: ${summary.pendingReview} mục chưa xử lý`;
 
-  if (summary.avgDuration > 0) {
-    msg += `\nTB hoàn thành: ${avgStr}`;
-  }
-
-  if (summary.pendingReview > 0) {
-    msg += `\n\n⚠️ Cần kiểm tra: ${summary.pendingReview} mục chưa xử lý`;
-  }
-
-  const inWorkshop = await sheets.getAllInWorkshop();
+  const inWorkshop = await db.getAllInWorkshop(tz);
   if (inWorkshop.length > 0) {
     msg += formatWorkshopSummary(inWorkshop, tz);
   }
 
   msg += `\n\nGõ TONKHO để xem danh sách đầy đủ.`;
-
   return { replyMessage: msg };
 }
 
@@ -431,8 +386,8 @@ async function notifyManagers(message, config) {
 // ──────────────────────────────────────────────
 
 async function handleProductivityReport(config) {
-  const tz = config.timezone;
-  const data = await sheets.getProductivityData(tz);
+  const tz   = config.timezone;
+  const data = await db.getProductivityData(tz);
 
   let msg = `📊 Báo cáo năng suất xưởng — ${data.today}\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -444,9 +399,9 @@ async function handleProductivityReport(config) {
   msg += `\n  Tỷ lệ hoàn thành: ${data.completionRate}%`;
 
   msg += `\n\n📈 So sánh với hôm qua (${data.yesterday}):`;
-  const diffIn = data.todayIn - data.yesterdayIn;
+  const diffIn  = data.todayIn  - data.yesterdayIn;
   const diffOut = data.todayOut - data.yesterdayOut;
-  const arrowIn = diffIn > 0 ? `+${diffIn} ↑` : diffIn < 0 ? `${diffIn} ↓` : '= bằng';
+  const arrowIn  = diffIn  > 0 ? `+${diffIn} ↑`  : diffIn  < 0 ? `${diffIn} ↓`  : '= bằng';
   const arrowOut = diffOut > 0 ? `+${diffOut} ↑` : diffOut < 0 ? `${diffOut} ↓` : '= bằng';
   msg += `\n  Tiếp nhận: ${data.yesterdayIn} → ${data.todayIn} (${arrowIn})`;
   msg += `\n  Hoàn thành: ${data.yesterdayOut} → ${data.todayOut} (${arrowOut})`;
@@ -455,14 +410,10 @@ async function handleProductivityReport(config) {
     const avgStr = utils.formatDuration(data.avgDuration);
     msg += `\n\n⏱ Thời gian xử lý:`;
     msg += `\n  Trung bình: ${avgStr}`;
-    if (data.fastestVehicle) {
-      msg += `\n  Nhanh nhất: ${data.fastestVehicle.plate} (${utils.formatDuration(data.fastestVehicle.duration)})`;
-    }
-    if (data.slowestVehicle) {
-      msg += `\n  Chậm nhất: ${data.slowestVehicle.plate} (${utils.formatDuration(data.slowestVehicle.duration)})`;
-    }
+    if (data.fastestVehicle) msg += `\n  Nhanh nhất: ${data.fastestVehicle.plate} (${utils.formatDuration(data.fastestVehicle.duration)})`;
+    if (data.slowestVehicle) msg += `\n  Chậm nhất: ${data.slowestVehicle.plate} (${utils.formatDuration(data.slowestVehicle.duration)})`;
     if (data.yesterdayAvgDuration > 0) {
-      const diffAvg = data.avgDuration - data.yesterdayAvgDuration;
+      const diffAvg  = data.avgDuration - data.yesterdayAvgDuration;
       const avgArrow = diffAvg > 0
         ? `chậm hơn ${utils.formatDuration(Math.abs(diffAvg))}`
         : diffAvg < 0
@@ -483,17 +434,15 @@ async function handleProductivityReport(config) {
   if (data.warningCount > 0 || data.urgentCount > 0) {
     msg += `\n\n⚠️ Cảnh báo:`;
     if (data.warningCount > 0) msg += `\n  Quá 24h: ${data.warningCount} xe`;
-    if (data.urgentCount > 0) msg += `\n  🚨 Khẩn quá 48h: ${data.urgentCount} xe`;
+    if (data.urgentCount > 0)  msg += `\n  🚨 Khẩn quá 48h: ${data.urgentCount} xe`;
   }
 
   if (data.inWorkshop > 0) {
-    const inWorkshop = await sheets.getAllInWorkshop();
+    const inWorkshop = await db.getAllInWorkshop(tz);
     msg += formatWorkshopSummary(inWorkshop, tz);
   }
 
-  if (data.pendingReview > 0) {
-    msg += `\n\n📋 Cần kiểm tra thủ công: ${data.pendingReview} mục`;
-  }
+  if (data.pendingReview > 0) msg += `\n\n📋 Cần kiểm tra thủ công: ${data.pendingReview} mục`;
 
   msg += `\n\nGõ TONKHO để xem danh sách đầy đủ.`;
   msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
@@ -508,7 +457,7 @@ async function sendScheduledProductivityReport(config) {
 }
 
 // ──────────────────────────────────────────────
-// BAO CAO KE TOAN - xu ly file Excel tu phong ke toan
+// BAO CAO KE TOAN
 // ──────────────────────────────────────────────
 
 async function handleAccountingReport(fileUrl, config) {
@@ -522,6 +471,15 @@ async function handleAccountingReport(fileUrl, config) {
 
   const messages = await generateAccountingReport(orders, config);
   return { messages };
+}
+
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+
+function fmtIso(isoTs, tz) {
+  if (!isoTs) return '';
+  return DateTime.fromISO(isoTs, { zone: tz }).toFormat('dd/MM/yyyy HH:mm:ss');
 }
 
 module.exports = {
