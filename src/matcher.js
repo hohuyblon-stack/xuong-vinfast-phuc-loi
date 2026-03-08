@@ -490,6 +490,5 @@ module.exports = {
   handleDailyReport,
   sendScheduledDailyReport,
   handleProductivityReport,
-  sendScheduledProductivityReport,
   handleAccountingReport,
 };
