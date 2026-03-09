@@ -93,10 +93,11 @@ CREATE INDEX IF NOT EXISTS idx_reviews_timestamp     ON reviews (timestamp);
 -- ─────────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION process_vehicle(
-  p_plate      TEXT,
-  p_vehicle_id TEXT,
-  p_now_ts     TIMESTAMPTZ,
-  p_image_url  TEXT
+  p_plate              TEXT,
+  p_vehicle_id         TEXT,
+  p_now_ts             TIMESTAMPTZ,
+  p_image_url          TEXT,
+  p_min_workshop_secs  INTEGER DEFAULT 900
 )
 RETURNS TABLE(
   action      TEXT,
@@ -123,9 +124,9 @@ BEGIN
   IF FOUND THEN
     v_secs := EXTRACT(EPOCH FROM (p_now_ts - v_row.time_in));
 
-    IF v_secs < 60 THEN
-      -- Burst duplicate: car just entered within the last 60s.
-      -- Return special signal WITHOUT modifying the DB — treat as duplicate VAO.
+    IF v_secs < p_min_workshop_secs THEN
+      -- Too quick: car entered less than p_min_workshop_secs ago.
+      -- Likely a burst duplicate or OCR misread. Do NOT mark as RA.
       RETURN QUERY
         SELECT 'RA_DUPLICATE'::TEXT, v_row.vehicle_id, v_row.time_in, v_secs;
     ELSE

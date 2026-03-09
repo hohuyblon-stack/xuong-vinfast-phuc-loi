@@ -51,6 +51,7 @@ function loadConfig() {
     alerts: {
       warningHours: parseFloat(optionalEnv('ALERT_HOURS_WARNING', '24')),
       urgentHours: parseFloat(optionalEnv('ALERT_HOURS_URGENT', '48')),
+      minWorkshopMinutes: parseInt(optionalEnv('MIN_WORKSHOP_MINUTES', '15'), 10),
     },
 
     // Quan ly

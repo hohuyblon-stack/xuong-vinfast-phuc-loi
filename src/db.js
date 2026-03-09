@@ -35,12 +35,13 @@ function initDb(config) {
  *
  * @returns {{ action: 'VAO'|'RA'|'RA_DUPLICATE', vehicle_id: string, time_in_ts: string, seconds_in: number }}
  */
-async function processVehicleDecision(plate, vehicleId, nowIso, imageUrl) {
+async function processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs = 900) {
   const { data, error } = await supabase.rpc('process_vehicle', {
-    p_plate:      plate,
-    p_vehicle_id: vehicleId,
-    p_now_ts:     nowIso,
-    p_image_url:  imageUrl,
+    p_plate:              plate,
+    p_vehicle_id:         vehicleId,
+    p_now_ts:             nowIso,
+    p_image_url:          imageUrl,
+    p_min_workshop_secs:  minWorkshopSecs,
   });
 
   if (error) throw new Error(`process_vehicle RPC failed: ${error.message}`);

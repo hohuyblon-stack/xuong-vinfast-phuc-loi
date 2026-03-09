@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": {"tools": ["Edit"]},
+        "matcher": "Edit",
         "hooks": [
           {"type": "command", "command": "bash /tmp/vinfast-phuc-loi/scripts/hook-block-env.sh"}
         ]
@@ -10,7 +10,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": {"tools": ["Edit"]},
+        "matcher": "Edit",
         "hooks": [
           {"type": "command", "command": "cd /tmp/vinfast-phuc-loi && node --test 'test/**/*.test.js' 2>&1 | tail -5"},
           {"type": "command", "command": "bash /tmp/vinfast-phuc-loi/scripts/hook-syntax-check.sh"}

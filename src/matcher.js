@@ -114,7 +114,8 @@ async function processVehicleEvent(event, config) {
 
   // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
 
-  const decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl);
+  const minWorkshopSecs = (config.alerts.minWorkshopMinutes || 15) * 60;
+  const decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs);
 
   if (decision.action === 'VAO') {
     await db.updateEventResult(eventId, 'Da ghi VAO danh sach');
