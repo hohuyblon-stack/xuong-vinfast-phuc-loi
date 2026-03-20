@@ -168,12 +168,13 @@ describe('recognizePlate', () => {
       };
     };
 
+    // annotations[0] = full text (all lines), annotations[1..n] = individual blocks
     vision.ImageAnnotatorClient = function() {
       this.textDetection = async () => [{
         textAnnotations: [
-          { description: 'garbage text' },
-          { description: '30A-12345' }, // Valid format
-          { description: '51F1-99999' }, // Also valid
+          { description: '30A-12345\n51F1-99999' }, // Full text (line-separated)
+          { description: '30A-12345' },
+          { description: '51F1-99999' },
         ],
       }];
     };
@@ -181,7 +182,7 @@ describe('recognizePlate', () => {
     initOcr({ type: 'service_account', project_id: 'test' });
     const result = await recognizePlate('https://example.com/multiple.jpg');
 
-    // Should pick one of the valid plates
+    // Should pick one of the valid plates (highest score)
     assert.ok(['30A-12345', '51F1-99999'].includes(result.plateText));
     assert.ok(result.confidence > 0.5);
   });

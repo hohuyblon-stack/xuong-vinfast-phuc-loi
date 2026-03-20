@@ -21,9 +21,6 @@ describe('accounting module', () => {
 
   // Test formatMoney indirectly through report generation
   it('should handle order classification correctly', async () => {
-    // Mock sheets module
-    const sheets = require('./mocks/sheets-mock');
-
     // Create test data
     const testOrders = [
       {
