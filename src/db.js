@@ -26,6 +26,19 @@ function initDb(config) {
   logger.info('Supabase initialized', { url: config.supabase.url });
 }
 
+/**
+ * Test kết nối Supabase — gọi khi khởi động để fail-fast nếu credentials sai.
+ */
+async function testConnection() {
+  const { count, error } = await supabase
+    .from('vehicles')
+    .select('*', { count: 'exact', head: true })
+    .limit(1);
+
+  if (error) throw new Error(`Supabase connection test failed: ${error.message}`);
+  logger.info('Supabase connection verified', { vehicleCount: count });
+}
+
 // ──────────────────────────────────────────────
 // Core vehicle processing RPC
 // ──────────────────────────────────────────────
@@ -572,6 +585,7 @@ module.exports = {
   getProductivityData,
   getAllMainRows,
   getFullDailyReport,
+  testConnection,
   expireStaleVehicles,
   forceExitVehicle,
   countInWorkshop,

@@ -6,7 +6,7 @@ const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets } = require('./sheets');
-const { initDb, isMessageProcessed, expireStaleVehicles, forceExitVehicle, countInWorkshop } = require('./db');
+const { initDb, testConnection, isMessageProcessed, expireStaleVehicles, forceExitVehicle, countInWorkshop } = require('./db');
 const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
 const {
   processVehicleEvent,
@@ -33,8 +33,9 @@ let config;
 async function bootstrap() {
   config = loadConfig();
 
-  // Init Supabase (source of truth) — synchronous
+  // Init Supabase (source of truth)
   initDb(config);
+  await testConnection(); // Fail-fast nếu credentials sai
 
   // Init OCR — synchronous
   initOcr(config.ocr.credentials);
