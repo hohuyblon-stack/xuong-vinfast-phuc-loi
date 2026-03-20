@@ -17,12 +17,10 @@
  */
 
 const { DateTime } = require('luxon');
-const sheets = require('./sheets');
+const db = require('./db');
 const { normalizePlate } = require('./excel');
-const utils = require('./utils');
-const logger = require('./logger');
-
 const { splitIntoMessages } = require('./utils');
+const logger = require('./logger');
 
 function formatMoney(amount) {
   if (!amount || isNaN(amount)) return '0đ';
@@ -77,8 +75,8 @@ async function generateAccountingReport(excelOrders, config) {
   const tz = config.timezone;
   const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
 
-  // Lay toan bo lich su tracking (khong gioi han ngay)
-  const allTracking = await sheets.getAllMainRows();
+  // Lay toan bo lich su tracking tu Supabase (source of truth)
+  const allTracking = await db.getAllMainRows(tz);
 
   // Index tracking theo bien so: plate → entry moi nhat (uu tien dang trong xuong)
   const trackingByPlate = new Map();
