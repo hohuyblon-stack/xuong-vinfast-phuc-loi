@@ -148,6 +148,61 @@ async function getAllInWorkshop(tz) {
   }));
 }
 
+/**
+ * Expire xe kẹt quá lâu trong xưởng.
+ * Đánh dấu status = 'Hết hạn theo dõi' cho xe vào trước cutoffIso.
+ * @returns {number} Số xe đã expire
+ */
+async function expireStaleVehicles(cutoffIso, nowIso) {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      status: 'Hết hạn theo dõi',
+      note: `Tự động đóng — xe không có ảnh ra sau thời gian theo dõi`,
+      updated_at: nowIso,
+    })
+    .eq('status', 'Đang trong xưởng')
+    .lt('time_in', cutoffIso)
+    .select('vehicle_id');
+
+  if (error) throw new Error(`expireStaleVehicles failed: ${error.message}`);
+  return (data || []).length;
+}
+
+/**
+ * Force-exit 1 xe theo vehicleId.
+ */
+async function forceExitVehicle(vehicleId, nowIso) {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      status: 'Đã ra xưởng',
+      time_out: nowIso,
+      note: 'Force-exit bởi admin',
+      updated_at: nowIso,
+    })
+    .eq('vehicle_id', vehicleId)
+    .eq('status', 'Đang trong xưởng')
+    .select('vehicle_id, plate');
+
+  if (error) throw new Error(`forceExitVehicle failed: ${error.message}`);
+  if (!data || data.length === 0) return null;
+  return data[0];
+}
+
+/**
+ * Đếm xe đang trong xưởng.
+ */
+async function countInWorkshop() {
+  const { count, error } = await supabase
+    .from('vehicles')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'Đang trong xưởng');
+
+  if (error) throw new Error(`countInWorkshop failed: ${error.message}`);
+  return count || 0;
+}
+
 async function updateVehiclePriority(vehicleId, priority, nowIso) {
   const { error } = await supabase
     .from('vehicles')
@@ -517,4 +572,7 @@ module.exports = {
   getProductivityData,
   getAllMainRows,
   getFullDailyReport,
+  expireStaleVehicles,
+  forceExitVehicle,
+  countInWorkshop,
 };

@@ -6,7 +6,7 @@ const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets } = require('./sheets');
-const { initDb, isMessageProcessed } = require('./db');
+const { initDb, isMessageProcessed, expireStaleVehicles, forceExitVehicle, countInWorkshop } = require('./db');
 const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
 const {
   processVehicleEvent,
@@ -128,6 +128,52 @@ async function bootstrap() {
     }
   });
 
+  // Admin: expire xe kẹt quá lâu (mặc định >7 ngày)
+  app.post('/admin/expire-stale', requireAdminKey, async (req, res) => {
+    try {
+      const days = parseInt(req.body.days || '7', 10);
+      const { DateTime } = require('luxon');
+      const cutoff = DateTime.now().setZone(config.timezone).minus({ days }).toISO();
+      const nowIso = new Date().toISOString();
+
+      const before = await countInWorkshop();
+      const expired = await expireStaleVehicles(cutoff, nowIso);
+      const after = await countInWorkshop();
+
+      logger.info('Stale vehicles expired', { days, expired, before, after });
+      res.json({ status: 'ok', expired, before, after, cutoffDays: days });
+    } catch (err) {
+      logger.error('Expire stale failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: force-exit 1 xe
+  app.post('/admin/force-exit/:vehicleId', requireAdminKey, async (req, res) => {
+    try {
+      const nowIso = new Date().toISOString();
+      const result = await forceExitVehicle(req.params.vehicleId, nowIso);
+      if (!result) {
+        return res.status(404).json({ error: 'Không tìm thấy xe đang trong xưởng với ID này' });
+      }
+      logger.info('Vehicle force-exited', { vehicleId: result.vehicle_id, plate: result.plate });
+      res.json({ status: 'ok', vehicle: result });
+    } catch (err) {
+      logger.error('Force exit failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: xem tồn kho count
+  app.get('/admin/workshop-count', requireAdminKey, async (_req, res) => {
+    try {
+      const count = await countInWorkshop();
+      res.json({ status: 'ok', inWorkshop: count });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Start server
   const port = config.port;
   app.listen(port, async () => {
@@ -182,6 +228,37 @@ async function bootstrap() {
 
   // Bao cao tu dong cuoi ngay
   scheduleDailyReport();
+
+  // Tu dong don dep xe ket moi ngay luc 5h sang
+  scheduleStaleCleanup();
+}
+
+function scheduleStaleCleanup() {
+  const STALE_DAYS = 7;
+  let lastCleanupDate = '';
+
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (currentHour === 5 && lastCleanupDate !== todayStr) {
+      lastCleanupDate = todayStr;
+      try {
+        const cutoff = now.minus({ days: STALE_DAYS }).toISO();
+        const nowIso = new Date().toISOString();
+        const expired = await expireStaleVehicles(cutoff, nowIso);
+        if (expired > 0) {
+          logger.info(`Auto-cleanup: ${expired} stale vehicles expired (>${STALE_DAYS} days)`);
+        }
+      } catch (err) {
+        logger.error('Scheduled stale cleanup failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`Stale vehicle cleanup scheduled at 05:00 (>${STALE_DAYS} days)`);
 }
 
 // ──────────────────────────────────────────────
