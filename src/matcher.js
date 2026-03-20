@@ -168,17 +168,19 @@ async function processVehicleEvent(event, config) {
   }
 
   if (decision.action === 'RA_DUPLICATE') {
-    await db.updateEventResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
-    sheetsSync.syncLogResult(eventId, 'Anh trung lap - xe vua vao xuong, bo qua RA');
+    await db.updateEventResult(eventId, 'Chua du thoi gian - bo qua RA');
+    sheetsSync.syncLogResult(eventId, 'Chua du thoi gian - bo qua RA');
 
     const timeInFormatted = fmtIso(decision.time_in_ts, tz);
-    logger.info('Duplicate capture ignored - car just entered', {
+    logger.info('RA rejected - vehicle just entered', {
       plate, secondsInWorkshop: Math.round(decision.seconds_in),
       minWorkshopMinutes: config.alerts.minWorkshopMinutes,
     });
     return {
-      success: true,
-      replyMessage: `ℹ️ Xe ${plate} đã được ghi nhận VÀO lúc ${timeInFormatted}\nMã lượt: ${decision.vehicle_id}`,
+      success: false,
+      replyMessage:
+        `⏳ Xe ${plate} mới vào lúc ${timeInFormatted}, chưa đủ ${config.alerts.minWorkshopMinutes} phút.\n` +
+        `Hệ thống chưa ghi RA. Vui lòng gửi lại ảnh sau.`,
       eventId,
     };
   }
