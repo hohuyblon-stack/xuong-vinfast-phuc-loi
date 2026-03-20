@@ -25,6 +25,12 @@ function loadConfig() {
     telegram: {
       botToken: requireEnv('TELEGRAM_BOT_TOKEN'),
       webhookUrl: optionalEnv('TELEGRAM_WEBHOOK_URL', ''),
+      webhookSecret: optionalEnv('TELEGRAM_WEBHOOK_SECRET', ''),
+    },
+
+    // Security
+    security: {
+      adminApiKey: optionalEnv('ADMIN_API_KEY', ''),
     },
 
     // Google Sheets
@@ -35,6 +41,7 @@ function loadConfig() {
         main: optionalEnv('SHEET_TAB_MAIN', 'DANH SÁCH CHÍNH'),
         log: optionalEnv('SHEET_TAB_LOG', 'NHẬT KÝ'),
         review: optionalEnv('SHEET_TAB_REVIEW', 'CẦN KIỂM TRA'),
+        dailyReport: optionalEnv('SHEET_TAB_DAILY_REPORT', 'BÁO CÁO HÀNG NGÀY'),
       },
     },
 

@@ -183,6 +183,7 @@ async function getDailySummary(tz) {
 
   if (recentRes.error)   throw new Error(`getDailySummary recent: ${recentRes.error.message}`);
   if (workshopRes.error) throw new Error(`getDailySummary workshop: ${workshopRes.error.message}`);
+  if (reviewRes.error)   logger.error('getDailySummary reviews query failed (non-blocking)', { error: reviewRes.error.message });
 
   const rows = mergeUnique([...(recentRes.data || []), ...(workshopRes.data || [])], 'vehicle_id');
 
@@ -247,6 +248,7 @@ async function getProductivityData(tz) {
 
   if (recentRes.error)   throw new Error(`getProductivityData recent: ${recentRes.error.message}`);
   if (workshopRes.error) throw new Error(`getProductivityData workshop: ${workshopRes.error.message}`);
+  if (reviewRes.error)   logger.error('getProductivityData reviews query failed (non-blocking)', { error: reviewRes.error.message });
 
   const rows = mergeUnique([...(recentRes.data || []), ...(workshopRes.data || [])], 'vehicle_id');
 
@@ -341,6 +343,139 @@ async function getAllMainRows(tz) {
 }
 
 // ──────────────────────────────────────────────
+// Full daily report (BAOCAO + NANGSUAT + TONKHO)
+// ──────────────────────────────────────────────
+
+async function getFullDailyReport(tz) {
+  const zone      = tz || appTimezone;
+  const now       = DateTime.now().setZone(zone);
+  const yesterday = now.minus({ days: 1 });
+  const since     = yesterday.startOf('day').toISO();
+
+  const [recentRes, workshopRes, reviewRes] = await Promise.all([
+    supabase
+      .from('vehicles')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .gte('time_in', since),
+    supabase
+      .from('vehicles')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .eq('status', 'Đang trong xưởng'),
+    supabase
+      .from('reviews')
+      .select('*', { count: 'exact', head: true })
+      .eq('review_status', 'Chưa xử lý'),
+  ]);
+
+  if (recentRes.error)   throw new Error(`getFullDailyReport recent: ${recentRes.error.message}`);
+  if (workshopRes.error) throw new Error(`getFullDailyReport workshop: ${workshopRes.error.message}`);
+  if (reviewRes.error)   logger.error('getFullDailyReport reviews query failed (non-blocking)', { error: reviewRes.error.message });
+
+  const rows = mergeUnique([...(recentRes.data || []), ...(workshopRes.data || [])], 'vehicle_id');
+
+  // Aggregate counters
+  let totalIn = 0, totalOut = 0, inWorkshopCount = 0;
+  let warningCount = 0, urgentCount = 0;
+  let totalDuration = 0, completedCount = 0;
+  let yesterdayIn = 0, yesterdayOut = 0, yesterdayTotalDuration = 0, yesterdayCompletedCount = 0;
+  let fastestVehicle = null, slowestVehicle = null;
+  const timeSlots = { sang: 0, chieu: 0, toi: 0, dem: 0 };
+
+  // Vehicle detail lists
+  const vehiclesOut    = [];  // ra hôm nay
+  const vehiclesInToday = []; // vào hôm nay, chưa ra
+  const inWorkshop     = [];  // tất cả đang trong xưởng
+
+  for (const v of rows) {
+    const timeIn  = v.time_in  ? DateTime.fromISO(v.time_in,  { zone }) : null;
+    const timeOut = v.time_out ? DateTime.fromISO(v.time_out, { zone }) : null;
+    const dur     = v.duration_minutes;
+    const vehicle = {
+      vehicleId: v.vehicle_id,
+      plate:     v.plate,
+      timeIn:    fmtTs(v.time_in, zone),
+      timeOut:   fmtTs(v.time_out, zone),
+      durationMinutes: dur,
+      priority:  v.priority,
+      status:    v.status,
+    };
+
+    // Today's entries
+    if (timeIn && isSameDay(timeIn, now)) {
+      totalIn++;
+      const h = timeIn.hour;
+      if (h >= 6 && h < 12)       timeSlots.sang++;
+      else if (h >= 12 && h < 18) timeSlots.chieu++;
+      else if (h >= 18)           timeSlots.toi++;
+      else                        timeSlots.dem++;
+    }
+
+    // Yesterday's entries
+    if (timeIn && isSameDay(timeIn, yesterday)) yesterdayIn++;
+
+    // Today's exits
+    if (timeOut && isSameDay(timeOut, now)) {
+      totalOut++;
+      vehiclesOut.push(vehicle);
+      if (dur != null) {
+        totalDuration += dur;
+        completedCount++;
+        if (!fastestVehicle || dur < fastestVehicle.durationMinutes) fastestVehicle = vehicle;
+        if (!slowestVehicle || dur > slowestVehicle.durationMinutes) slowestVehicle = vehicle;
+      }
+    }
+
+    // Yesterday's exits
+    if (timeOut && isSameDay(timeOut, yesterday) && dur != null) {
+      yesterdayOut++;
+      yesterdayTotalDuration += dur;
+      yesterdayCompletedCount++;
+    }
+
+    // In workshop
+    if (v.status === 'Đang trong xưởng') {
+      inWorkshopCount++;
+      inWorkshop.push(vehicle);
+      if (v.priority === 'Cảnh báo') warningCount++;
+      if (v.priority === 'Khẩn')     urgentCount++;
+
+      // Vào hôm nay nhưng chưa ra
+      if (timeIn && isSameDay(timeIn, now)) vehiclesInToday.push(vehicle);
+    }
+  }
+
+  return {
+    today:     now.toFormat('dd/MM/yyyy'),
+    yesterday: yesterday.toFormat('dd/MM/yyyy'),
+
+    // Vehicle details
+    vehiclesOut,
+    vehiclesInToday,
+    inWorkshop,
+
+    // Summary (BAOCAO)
+    totalIn,
+    totalOut,
+    inWorkshopCount,
+    warningCount,
+    urgentCount,
+    pendingReview: reviewRes.count || 0,
+    avgDuration:   completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
+
+    // Productivity (NANGSUAT)
+    yesterdayIn,
+    yesterdayOut,
+    yesterdayAvgDuration: yesterdayCompletedCount > 0
+      ? Math.round(yesterdayTotalDuration / yesterdayCompletedCount) : 0,
+    completionRate: totalIn > 0 ? Math.round((totalOut / totalIn) * 100) : 0,
+    completedCount,
+    fastestVehicle,
+    slowestVehicle,
+    timeSlots,
+  };
+}
+
+// ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
 
@@ -381,4 +516,5 @@ module.exports = {
   getDailySummary,
   getProductivityData,
   getAllMainRows,
+  getFullDailyReport,
 };

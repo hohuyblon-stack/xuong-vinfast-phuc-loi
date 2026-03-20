@@ -26,6 +26,10 @@ const COLUMNS = {
     'Biển số (đúng)', 'Lý do', 'Hướng xử lý', 'Trạng thái xử lý', 'Ghi chú',
     'Người xử lý', 'Thời điểm xử lý', 'Liên kết lượt xe',
   ],
+  dailyReport: [
+    'Ngày', 'STT', 'Biển Số', 'Giờ Vào', 'Giờ Ra', 'Lưu (phút)',
+    'Ưu Tiên', 'Trạng Thái', 'Loại', 'Tổng Vào', 'Tổng Ra', 'Tồn Kho', 'TB Lưu (phút)',
+  ],
 };
 
 // ──────────────────────────────────────────────
@@ -58,6 +62,7 @@ async function ensureTabs() {
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
+    { key: 'dailyReport', name: tabNames.dailyReport, columns: COLUMNS.dailyReport },
   ];
 
   const requests = [];
@@ -488,6 +493,42 @@ async function appendReviewRow(row) {
 }
 
 // ──────────────────────────────────────────────
+// BÁO CÁO HÀNG NGÀY (11 columns: A-K)
+// ──────────────────────────────────────────────
+
+/**
+ * Batch append rows to "BÁO CÁO HÀNG NGÀY".
+ * Each row: { date, stt, plate, timeIn, timeOut, duration, priority, status, type, totalIn, totalOut, inWorkshop, avgDuration }
+ */
+async function appendDailyReportRows(rows) {
+  const values = rows.map(r => [
+    r.date || '',
+    r.stt || '',
+    r.plate || '',
+    r.timeIn || '',
+    r.timeOut || '',
+    r.duration || '',
+    r.priority || '',
+    r.status || '',
+    r.type || '',
+    r.totalIn || '',
+    r.totalOut || '',
+    r.inWorkshop || '',
+    r.avgDuration || '',
+  ]);
+
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${tabNames.dailyReport}'!A:M`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values },
+  });
+
+  logger.info('Appended daily report rows', { count: rows.length });
+}
+
+// ──────────────────────────────────────────────
 // Idempotency check
 // ──────────────────────────────────────────────
 
@@ -528,4 +569,5 @@ module.exports = {
   appendLogRow,
   updateLogResult,
   appendReviewRow,
+  appendDailyReportRows,
 };

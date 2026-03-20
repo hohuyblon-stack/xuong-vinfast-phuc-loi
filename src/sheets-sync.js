@@ -56,6 +56,10 @@ function syncVehiclePriority(plate, priority, updatedAt) {
   }, `updatePriority:${plate}`);
 }
 
+function syncDailyReport(reportDate, rows) {
+  fire(() => sheets.appendDailyReportRows(rows), `dailyReport:${reportDate}`);
+}
+
 module.exports = {
   syncVehicleIn,
   syncVehicleOut,
@@ -63,4 +67,5 @@ module.exports = {
   syncLogResult,
   syncReviewInsert,
   syncVehiclePriority,
+  syncDailyReport,
 };

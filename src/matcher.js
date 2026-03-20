@@ -114,8 +114,33 @@ async function processVehicleEvent(event, config) {
 
   // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
 
-  const minWorkshopSecs = (config.alerts.minWorkshopMinutes || 15) * 60;
-  const decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs);
+  const minWorkshopSecs = config.alerts.minWorkshopMinutes * 60;
+  let decision;
+  try {
+    decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs);
+  } catch (err) {
+    logger.error('processVehicleDecision RPC failed', { eventId, plate, error: err.message });
+
+    // Best-effort: mark event as error state.
+    // If this write also fails (e.g. DB is down), log it and continue —
+    // never let a secondary failure suppress the guard-facing retry reply.
+    try {
+      await db.updateEventResult(eventId, 'Loi he thong - RPC that bai');
+    } catch (writeErr) {
+      logger.error('updateEventResult failed during RPC error path', {
+        eventId, plate, error: writeErr.message,
+      });
+    }
+
+    // Fire-and-forget — already handles its own errors internally via fire()
+    sheetsSync.syncLogResult(eventId, 'Loi he thong - RPC that bai');
+
+    return {
+      success: false,
+      replyMessage: `⚠️ Hệ thống gặp lỗi khi xử lý xe ${plate}.\nVui lòng gửi lại ảnh để thử lại nhé.`,
+      eventId,
+    };
+  }
 
   if (decision.action === 'VAO') {
     await db.updateEventResult(eventId, 'Da ghi VAO danh sach');
@@ -149,6 +174,7 @@ async function processVehicleEvent(event, config) {
     const timeInFormatted = fmtIso(decision.time_in_ts, tz);
     logger.info('Duplicate capture ignored - car just entered', {
       plate, secondsInWorkshop: Math.round(decision.seconds_in),
+      minWorkshopMinutes: config.alerts.minWorkshopMinutes,
     });
     return {
       success: true,
@@ -195,29 +221,29 @@ async function handleTonKho(config) {
   const urgent  = [];
   const warning = [];
   const normal  = [];
+  let stt = 1;
 
   for (const v of vehicles) {
-    const hours = utils.hoursSince(v.timeIn, tz);
-    const line  = `${v.plate} — ${utils.formatHours(hours)}`;
-
-    if (v.priority === 'Khẩn')       urgent.push(line);
+    const line = { stt: stt++, text: utils.formatVehicleInProgress(v, tz) };
+    if (v.priority === 'Khẩn')         urgent.push(line);
     else if (v.priority === 'Cảnh báo') warning.push(line);
-    else                               normal.push(line);
+    else                                normal.push(line);
   }
 
   let msg = `🔧 Tồn kho: ${vehicles.length} xe trong xưởng`;
+  msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   if (urgent.length > 0) {
-    msg += `\n\n🚨 Khẩn — >48h (${urgent.length}):`;
-    for (const v of urgent) msg += `\n  ${v}`;
+    msg += `\n\n🚨 Khẩn >48h (${urgent.length}):`;
+    for (const v of urgent) msg += `\n  ${v.stt}. ${v.text}`;
   }
   if (warning.length > 0) {
-    msg += `\n\n⚠️ Cảnh báo — >24h (${warning.length}):`;
-    for (const v of warning) msg += `\n  ${v}`;
+    msg += `\n\n⚠️ Cảnh báo >24h (${warning.length}):`;
+    for (const v of warning) msg += `\n  ${v.stt}. ${v.text}`;
   }
   if (normal.length > 0) {
     msg += `\n\n🔧 Bình thường (${normal.length}):`;
-    for (const v of normal) msg += `\n  ${v}`;
+    for (const v of normal) msg += `\n  ${v.stt}. ${v.text}`;
   }
 
   return { replyMessage: msg };
@@ -234,11 +260,9 @@ function handleHelp() {
     `\nChụp ảnh biển số → Gửi vào đây (không cần gõ gì thêm)` +
     `\n  Lần 1: Tự động ghi xe VÀO xưởng` +
     `\n  Lần 2: Tự động ghi xe RA + thời gian lưu` +
-    `\n\n— Xem tồn kho —` +
-    `\nTONKHO — Danh sách xe đang trong xưởng` +
     `\n\n— Báo cáo —` +
-    `\nBAOCAO — Báo cáo tổng hợp trong ngày` +
-    `\nNANGSUAT — Báo cáo năng suất chi tiết` +
+    `\nBAOCAO — Báo cáo tổng hợp (năng suất + tồn kho + chi tiết xe)` +
+    `\nTONKHO — Xem nhanh tồn kho` +
     `\n\n— Khác —` +
     `\nHELP — Xem hướng dẫn này`;
 
@@ -458,6 +482,157 @@ async function sendScheduledProductivityReport(config) {
 }
 
 // ──────────────────────────────────────────────
+// BAO CAO TONG HOP (gop BAOCAO + NANGSUAT + TONKHO)
+// ──────────────────────────────────────────────
+
+async function handleFullReport(config) {
+  const tz   = config.timezone;
+  const data = await db.getFullDailyReport(tz);
+  const parts = [];
+
+  // ── Header + Tổng quan ──
+  const avgStr = data.avgDuration > 0 ? utils.formatDuration(data.avgDuration) : 'N/A';
+  let header = `📊 BÁO CÁO TỔNG HỢP — ${data.today}`;
+  header += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  header += `\n\n📋 TỔNG QUAN`;
+  header += `\n  Vào: ${data.totalIn} | Ra: ${data.totalOut} | Xưởng: ${data.inWorkshopCount}`;
+  header += `\n  TB hoàn thành: ${avgStr}`;
+  if (data.pendingReview > 0) header += `\n  Cần kiểm tra: ${data.pendingReview} mục`;
+  parts.push(header);
+
+  // ── Năng suất ──
+  let prod = `📈 NĂNG SUẤT`;
+  const diffIn  = data.totalIn  - data.yesterdayIn;
+  const diffOut = data.totalOut - data.yesterdayOut;
+  const arrowIn  = diffIn > 0 ? `+${diffIn}↑` : diffIn < 0 ? `${diffIn}↓` : '=';
+  const arrowOut = diffOut > 0 ? `+${diffOut}↑` : diffOut < 0 ? `${diffOut}↓` : '=';
+  prod += `\n  So hôm qua (${data.yesterday}): Vào ${data.yesterdayIn}→${data.totalIn} (${arrowIn}) | Ra ${data.yesterdayOut}→${data.totalOut} (${arrowOut})`;
+  prod += `\n  Tỷ lệ hoàn thành: ${data.completionRate}%`;
+  if (data.fastestVehicle) prod += `\n  Nhanh nhất: ${data.fastestVehicle.plate} (${utils.formatDuration(data.fastestVehicle.durationMinutes)})`;
+  if (data.slowestVehicle) prod += `\n  Chậm nhất: ${data.slowestVehicle.plate} (${utils.formatDuration(data.slowestVehicle.durationMinutes)})`;
+  if (data.totalIn > 0) {
+    prod += `\n  Phân bố: Sáng ${data.timeSlots.sang} | Chiều ${data.timeSlots.chieu} | Tối ${data.timeSlots.toi}`;
+    if (data.timeSlots.dem > 0) prod += ` | Đêm ${data.timeSlots.dem}`;
+  }
+  parts.push(prod);
+
+  // ── Xe ra hôm nay (chi tiết) ──
+  let stt = 1;
+  if (data.vehiclesOut.length > 0) {
+    let section = `✅ XE RA HÔM NAY (${data.vehiclesOut.length}):`;
+    for (const v of data.vehiclesOut) {
+      section += `\n  ${stt++}. ${utils.formatVehicleCompleted(v, tz)}`;
+    }
+    parts.push(section);
+  }
+
+  // ── Xe vào hôm nay, chưa ra ──
+  if (data.vehiclesInToday.length > 0) {
+    let section = `📥 XE VÀO HÔM NAY, CHƯA RA (${data.vehiclesInToday.length}):`;
+    for (const v of data.vehiclesInToday) {
+      section += `\n  ${stt++}. ${utils.formatVehicleInProgress(v, tz)}`;
+    }
+    parts.push(section);
+  }
+
+  // ── Tồn kho — đang trong xưởng ──
+  if (data.inWorkshop.length > 0) {
+    const urgent  = [];
+    const warning = [];
+    const normal  = [];
+
+    for (const v of data.inWorkshop) {
+      const alreadyInToday = data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId);
+      if (alreadyInToday) continue;
+      const line = { stt: stt++, text: utils.formatVehicleInProgress(v, tz) };
+      if (v.priority === 'Khẩn')         urgent.push(line);
+      else if (v.priority === 'Cảnh báo') warning.push(line);
+      else                                normal.push(line);
+    }
+
+    const oldStockCount = urgent.length + warning.length + normal.length;
+    let section = `🔧 TỒN KHO — ĐANG TRONG XƯỞNG (${data.inWorkshop.length}):`;
+    if (oldStockCount > 0) section += `\n  (Tồn từ trước: ${oldStockCount} xe)`;
+
+    if (urgent.length > 0) {
+      section += `\n  Khẩn >48h (${urgent.length}):`;
+      for (const v of urgent) section += `\n    ${v.stt}. ${v.text}`;
+    }
+    if (warning.length > 0) {
+      section += `\n  Cảnh báo >24h (${warning.length}):`;
+      for (const v of warning) section += `\n    ${v.stt}. ${v.text}`;
+    }
+    if (normal.length > 0) {
+      section += `\n  Bình thường (${normal.length}):`;
+      for (const v of normal) section += `\n    ${v.stt}. ${v.text}`;
+    }
+
+    parts.push(section);
+  }
+
+  parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+  const replyMessages = utils.splitIntoMessages(parts);
+
+  // Fire-and-forget: sync to Google Sheets
+  syncDailyReportToSheets(data);
+
+  return { replyMessages };
+}
+
+function syncDailyReportToSheets(data) {
+  const sheetRows = [];
+  let stt = 1;
+
+  for (const v of data.vehiclesOut) {
+    sheetRows.push({
+      date: data.today, stt: String(stt++), plate: v.plate,
+      timeIn: v.timeIn, timeOut: v.timeOut,
+      duration: v.durationMinutes != null ? String(v.durationMinutes) : '',
+      priority: v.priority, status: v.status, type: 'RA HÔM NAY',
+    });
+  }
+
+  for (const v of data.vehiclesInToday) {
+    sheetRows.push({
+      date: data.today, stt: String(stt++), plate: v.plate,
+      timeIn: v.timeIn, timeOut: '',
+      duration: '', priority: v.priority, status: v.status, type: 'VÀO HÔM NAY',
+    });
+  }
+
+  for (const v of data.inWorkshop) {
+    const alreadyListed = data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId);
+    if (alreadyListed) continue;
+    sheetRows.push({
+      date: data.today, stt: String(stt++), plate: v.plate,
+      timeIn: v.timeIn, timeOut: '',
+      duration: '', priority: v.priority, status: v.status, type: 'TRONG XƯỞNG',
+    });
+  }
+
+  // Summary row
+  sheetRows.push({
+    date: data.today, stt: '', plate: '── TỔNG KẾT ──',
+    timeIn: '', timeOut: '', duration: '', priority: '', status: '',
+    type: '── TỔNG KẾT ──',
+    totalIn: String(data.totalIn), totalOut: String(data.totalOut),
+    inWorkshop: String(data.inWorkshopCount),
+    avgDuration: data.avgDuration > 0 ? String(data.avgDuration) : '',
+  });
+
+  sheetsSync.syncDailyReport(data.today, sheetRows);
+}
+
+async function sendScheduledFullReport(config) {
+  const report = await handleFullReport(config);
+  for (const msg of report.replyMessages) {
+    await notifyManagers(msg, config);
+  }
+  logger.info('Scheduled full daily report sent', { parts: report.replyMessages.length });
+}
+
+// ──────────────────────────────────────────────
 // BAO CAO KE TOAN
 // ──────────────────────────────────────────────
 
@@ -492,4 +667,6 @@ module.exports = {
   sendScheduledDailyReport,
   handleProductivityReport,
   handleAccountingReport,
+  handleFullReport,
+  sendScheduledFullReport,
 };

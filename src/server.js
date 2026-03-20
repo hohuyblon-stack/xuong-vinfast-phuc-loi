@@ -17,8 +17,11 @@ const {
   sendScheduledDailyReport,
   handleProductivityReport,
   handleAccountingReport,
+  handleFullReport,
+  sendScheduledFullReport,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
+const { isValidWebhookSecret, isValidAdminKey } = require('./middleware');
 const logger = require('./logger');
 
 // ──────────────────────────────────────────────
@@ -50,9 +53,24 @@ async function bootstrap() {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
   });
 
+  // Admin route protection middleware
+  function requireAdminKey(req, res, next) {
+    if (!isValidAdminKey(req.headers, config.security.adminApiKey)) {
+      logger.warn('Admin route unauthorized', { path: req.path, ip: req.ip });
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+  }
+
   // Telegram webhook (POST)
   app.post('/webhook/telegram', async (req, res) => {
     try {
+      // Validate webhook secret before accepting the update
+      if (!isValidWebhookSecret(req.headers, config.telegram.webhookSecret)) {
+        logger.warn('Telegram webhook: invalid secret token', { ip: req.ip });
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
       // Tra 200 ngay de Telegram khong retry
       res.json({ ok: true });
 
@@ -89,7 +107,7 @@ async function bootstrap() {
   });
 
   // Admin: trigger alert check
-  app.post('/admin/check-alerts', async (_req, res) => {
+  app.post('/admin/check-alerts', requireAdminKey, async (_req, res) => {
     try {
       const updated = await checkTimeAlerts(config);
       res.json({ status: 'ok', updatedCount: updated });
@@ -99,11 +117,11 @@ async function bootstrap() {
     }
   });
 
-  // Admin: trigger daily report
-  app.post('/admin/daily-report', async (_req, res) => {
+  // Admin: trigger daily report (full combined report)
+  app.post('/admin/daily-report', requireAdminKey, async (_req, res) => {
     try {
-      const report = await handleDailyReport(config);
-      res.json({ status: 'ok', report: report.replyMessage });
+      const report = await handleFullReport(config);
+      res.json({ status: 'ok', report: report.replyMessages });
     } catch (err) {
       logger.error('Daily report failed', { error: err.message });
       res.status(500).json({ error: err.message });
@@ -116,12 +134,24 @@ async function bootstrap() {
     logger.info(`Server started on port ${port}`);
     logger.info('Xuong VinFast Phuc Loi - He thong theo doi xe vao/ra (Telegram Bot)');
     logger.info('Webhook URL: POST /webhook/telegram');
+    logger.info('Operational thresholds', {
+      minWorkshopMinutes: config.alerts.minWorkshopMinutes,
+      warningHours: config.alerts.warningHours,
+      urgentHours: config.alerts.urgentHours,
+    });
+
+    if (!config.telegram.webhookSecret) {
+      logger.warn('TELEGRAM_WEBHOOK_SECRET not set — webhook endpoint is unauthenticated');
+    }
+    if (!config.security.adminApiKey) {
+      logger.warn('ADMIN_API_KEY not set — /admin/* routes are unprotected');
+    }
 
     // Tu dong set webhook neu co TELEGRAM_WEBHOOK_URL
     if (config.telegram.webhookUrl) {
       try {
         const webhookFullUrl = `${config.telegram.webhookUrl}/webhook/telegram`;
-        await setWebhook(webhookFullUrl);
+        await setWebhook(webhookFullUrl, config.telegram.webhookSecret);
         logger.info(`Telegram webhook set: ${webhookFullUrl}`);
       } catch (err) {
         logger.error('Failed to set Telegram webhook', { error: err.message });
@@ -177,16 +207,19 @@ async function processMessageAsync(data) {
     return;
   }
 
-  // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP) ═══
+  // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP, BAOCAO, NANGSUAT) ═══
   const parsed = parseMessage(text);
   if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
     let result;
     if (parsed.action === 'TONKHO') result = await handleTonKho(config);
     else if (parsed.action === 'HELP') result = handleHelp();
-    else if (parsed.action === 'BAOCAO') result = await handleDailyReport(config);
-    else if (parsed.action === 'NANGSUAT') result = await handleProductivityReport(config);
+    else if (parsed.action === 'BAOCAO' || parsed.action === 'NANGSUAT') result = await handleFullReport(config);
 
-    if (result && result.replyMessage) {
+    if (result && result.replyMessages) {
+      for (const msg of result.replyMessages) {
+        await sendMessage(chatId, msg);
+      }
+    } else if (result && result.replyMessage) {
       await sendMessage(chatId, result.replyMessage);
     }
     return;
@@ -268,7 +301,7 @@ function scheduleDailyReport() {
     if (currentHour === reportHour && lastReportDate !== todayStr) {
       lastReportDate = todayStr;
       try {
-        await sendScheduledDailyReport(config);
+        await sendScheduledFullReport(config);
       } catch (err) {
         logger.error('Scheduled daily report failed', { error: err.message });
       }

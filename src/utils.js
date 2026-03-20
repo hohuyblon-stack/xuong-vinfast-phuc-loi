@@ -140,6 +140,74 @@ function parseMessage(text) {
 }
 
 // ──────────────────────────────────────────────
+// Report formatting helpers
+// ──────────────────────────────────────────────
+
+/**
+ * Format xe đã hoàn thành (có giờ ra).
+ * "30A-12345 — 08:15 → 14:30 (6h15p)"
+ */
+function formatVehicleCompleted(v, tz) {
+  const tIn  = extractTime(v.timeIn);
+  const tOut = extractTime(v.timeOut);
+  const dur  = v.durationMinutes != null ? ` (${formatHours(v.durationMinutes / 60)})` : '';
+  return `${v.plate} — ${tIn} → ${tOut}${dur}`;
+}
+
+/**
+ * Format xe đang trong xưởng.
+ * "🚨 51F-45678 — Vào 16/03 08:15 (96h)"
+ */
+function formatVehicleInProgress(v, tz) {
+  const hours = hoursSince(v.timeIn, tz);
+  const icon  = v.priority === 'Khẩn' ? '🚨' : v.priority === 'Cảnh báo' ? '⚠️' : '🔧';
+  const dateTime = extractDateTimeShort(v.timeIn, tz);
+  return `${icon} ${v.plate} — Vào ${dateTime} (${formatHours(hours)})`;
+}
+
+/**
+ * Trich xuat HH:mm tu chuoi "dd/MM/yyyy HH:mm:ss".
+ */
+function extractTime(dateStr) {
+  if (!dateStr) return '';
+  const match = dateStr.match(/\d{2}\/\d{2}\/\d{4} (\d{2}:\d{2})/);
+  return match ? match[1] : dateStr;
+}
+
+/**
+ * Trich xuat "dd/MM HH:mm" tu chuoi "dd/MM/yyyy HH:mm:ss".
+ * Neu cung ngay hom nay thi chi hien HH:mm.
+ */
+function extractDateTimeShort(dateStr, tz) {
+  if (!dateStr) return '';
+  const match = dateStr.match(/(\d{2})\/(\d{2})\/\d{4} (\d{2}:\d{2})/);
+  if (!match) return dateStr;
+  const now = DateTime.now().setZone(tz || 'Asia/Ho_Chi_Minh');
+  const day = match[1], month = match[2], time = match[3];
+  if (parseInt(day) === now.day && parseInt(month) === now.month) return time;
+  return `${day}/${month} ${time}`;
+}
+
+/**
+ * Split report sections into multiple messages respecting Telegram 4000 char limit.
+ * Never splits in the middle of a section.
+ */
+function splitIntoMessages(parts, maxLen = 4000) {
+  const messages = [];
+  let current = '';
+  for (const part of parts) {
+    if (current.length + part.length + 2 > maxLen) {
+      if (current) messages.push(current.trim());
+      current = part;
+    } else {
+      current += (current ? '\n\n' : '') + part;
+    }
+  }
+  if (current) messages.push(current.trim());
+  return messages;
+}
+
+// ──────────────────────────────────────────────
 // Confidence mapping
 // ──────────────────────────────────────────────
 
@@ -163,4 +231,9 @@ module.exports = {
   parseMessage,
   confidenceLabel,
   TEXT_ONLY_ACTIONS,
+  formatVehicleCompleted,
+  formatVehicleInProgress,
+  splitIntoMessages,
+  extractTime,
+  extractDateTimeShort,
 };

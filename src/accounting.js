@@ -22,7 +22,7 @@ const { normalizePlate } = require('./excel');
 const utils = require('./utils');
 const logger = require('./logger');
 
-const MAX_MSG_LEN = 4000;
+const { splitIntoMessages } = require('./utils');
 
 function formatMoney(amount) {
   if (!amount || isNaN(amount)) return '0đ';
@@ -257,21 +257,6 @@ function buildMessages(cats, totals, totalExcelOrders, today, tz) {
   }
 
   return splitIntoMessages(parts);
-}
-
-function splitIntoMessages(parts) {
-  const messages = [];
-  let current = '';
-  for (const part of parts) {
-    if (current.length + part.length + 2 > MAX_MSG_LEN) {
-      if (current) messages.push(current.trim());
-      current = part;
-    } else {
-      current += (current ? '\n\n' : '') + part;
-    }
-  }
-  if (current) messages.push(current.trim());
-  return messages;
 }
 
 module.exports = { generateAccountingReport };
