@@ -570,8 +570,6 @@ async function handleFullReport(config) {
     parts.push(section);
   }
 
-  parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
   const replyMessages = utils.splitIntoMessages(parts);
 
   // Fire-and-forget: sync to Google Sheets
