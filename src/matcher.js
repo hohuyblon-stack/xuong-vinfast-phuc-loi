@@ -262,6 +262,8 @@ function handleHelp() {
     `\nChụp ảnh biển số → Gửi vào đây (không cần gõ gì thêm)` +
     `\n  Lần 1: Tự động ghi xe VÀO xưởng` +
     `\n  Lần 2: Tự động ghi xe RA + thời gian lưu` +
+    `\n\n— Ghi nhận xe ra (thủ công) —` +
+    `\nRA 30A-12345 — Ghi nhận xe ra xưởng (chỉ quản lý)` +
     `\n\n— Báo cáo —` +
     `\nBAOCAO — Báo cáo tổng hợp (năng suất + tồn kho + chi tiết xe)` +
     `\nTONKHO — Xem nhanh tồn kho` +
@@ -646,6 +648,41 @@ async function sendScheduledFullReport(config) {
 }
 
 // ──────────────────────────────────────────────
+// RA THU CONG (manual exit via text command)
+// ──────────────────────────────────────────────
+
+async function handleManualExit(plate, senderName, config) {
+  const nowIso = new Date().toISOString();
+  const result = await db.forceExitByPlate(plate, nowIso);
+
+  if (!result) {
+    return { replyMessage: `❌ Không tìm thấy xe ${plate} đang trong xưởng.` };
+  }
+
+  const durationStr = utils.formatDuration(result.duration);
+  logger.info('Manual exit processed', { plate, vehicleId: result.vehicleId, by: senderName });
+
+  // Sync to Sheets
+  const now = utils.nowFormatted(config.timezone);
+  sheetsSync.syncVehicleOut(plate, result.vehicleId, {
+    timeOut: now,
+    duration: String(result.duration),
+    status: 'Đã ra xưởng',
+    note: `RA thủ công bởi ${senderName}`,
+    updatedAt: now,
+  });
+
+  return {
+    replyMessage:
+      `✅ Đã ghi nhận xe RA xưởng (thủ công)\n` +
+      `Biển số: ${plate}\n` +
+      `Vào lúc: ${result.timeIn}\n` +
+      `Thời gian lưu: ${durationStr}\n` +
+      `Ghi nhận bởi: ${senderName}`,
+  };
+}
+
+// ──────────────────────────────────────────────
 // BAO CAO KE TOAN
 // ──────────────────────────────────────────────
 
@@ -682,4 +719,5 @@ module.exports = {
   handleAccountingReport,
   handleFullReport,
   sendScheduledFullReport,
+  handleManualExit,
 };

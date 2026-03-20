@@ -216,6 +216,49 @@ async function countInWorkshop() {
   return count || 0;
 }
 
+/**
+ * Force-exit xe theo biển số (cho lệnh RA thủ công).
+ * Tìm xe mới nhất có plate + status='Đang trong xưởng' → update ra.
+ */
+async function forceExitByPlate(plate, nowIso) {
+  // Tìm xe mới nhất đang trong xưởng
+  const { data: found, error: findErr } = await supabase
+    .from('vehicles')
+    .select('vehicle_id, plate, time_in')
+    .eq('plate', plate)
+    .eq('status', 'Đang trong xưởng')
+    .order('time_in', { ascending: false })
+    .limit(1);
+
+  if (findErr) throw new Error(`forceExitByPlate find failed: ${findErr.message}`);
+  if (!found || found.length === 0) return null;
+
+  const vehicle = found[0];
+  const timeInDt = DateTime.fromISO(vehicle.time_in, { zone: appTimezone });
+  const nowDt    = DateTime.fromISO(nowIso, { zone: appTimezone });
+  const duration = Math.round(nowDt.diff(timeInDt, 'minutes').minutes);
+
+  const { error: updateErr } = await supabase
+    .from('vehicles')
+    .update({
+      status: 'Đã ra xưởng',
+      time_out: nowIso,
+      duration_minutes: duration > 0 ? duration : 0,
+      note: 'RA thủ công qua Telegram',
+      updated_at: nowIso,
+    })
+    .eq('vehicle_id', vehicle.vehicle_id);
+
+  if (updateErr) throw new Error(`forceExitByPlate update failed: ${updateErr.message}`);
+
+  return {
+    vehicleId: vehicle.vehicle_id,
+    plate: vehicle.plate,
+    timeIn: fmtTs(vehicle.time_in, appTimezone),
+    duration,
+  };
+}
+
 async function updateVehiclePriority(vehicleId, priority, nowIso) {
   const { error } = await supabase
     .from('vehicles')
@@ -586,6 +629,7 @@ module.exports = {
   getAllMainRows,
   getFullDailyReport,
   testConnection,
+  forceExitByPlate,
   expireStaleVehicles,
   forceExitVehicle,
   countInWorkshop,

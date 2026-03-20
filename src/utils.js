@@ -109,11 +109,11 @@ function isValidVietnamPlate(plate) {
 /**
  * Cac lenh text-only (khong can anh).
  */
-const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP', 'BAOCAO', 'NANGSUAT'];
+const TEXT_ONLY_ACTIONS = ['TONKHO', 'HELP', 'BAOCAO', 'NANGSUAT', 'RA_MANUAL'];
 
 /**
- * Parse text tin nhan - chi nhan dang TONKHO, HELP, BAOCAO, NANGSUAT.
- * Vao/Ra duoc tu dong xac dinh qua anh bien so.
+ * Parse text tin nhan.
+ * Nhan dang: TONKHO, HELP, BAOCAO, NANGSUAT, RA <bien so>.
  */
 function parseMessage(text) {
   if (!text) return { action: null, params: '' };
@@ -123,6 +123,13 @@ function parseMessage(text) {
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
     .trim();
+
+  // RA <biển số> — manual exit
+  const raMatch = normalized.match(/^RA\s+(.+)$/);
+  if (raMatch) {
+    const plate = normalizePlate(raMatch[1]);
+    if (plate) return { action: 'RA_MANUAL', params: plate };
+  }
 
   let action = null;
 

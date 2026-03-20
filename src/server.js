@@ -19,6 +19,7 @@ const {
   handleAccountingReport,
   handleFullReport,
   sendScheduledFullReport,
+  handleManualExit,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const { isValidWebhookSecret, isValidAdminKey } = require('./middleware');
@@ -290,13 +291,23 @@ async function processMessageAsync(data) {
     return;
   }
 
-  // ═══ TEXT-ONLY COMMANDS (TONKHO, HELP, BAOCAO, NANGSUAT) ═══
+  // ═══ TEXT-ONLY COMMANDS ═══
   const parsed = parseMessage(text);
   if (parsed.action && TEXT_ONLY_ACTIONS.includes(parsed.action)) {
     let result;
     if (parsed.action === 'TONKHO') result = await handleTonKho(config);
     else if (parsed.action === 'HELP') result = handleHelp();
     else if (parsed.action === 'BAOCAO' || parsed.action === 'NANGSUAT') result = await handleFullReport(config);
+    else if (parsed.action === 'RA_MANUAL') {
+      // Chỉ manager mới được dùng lệnh RA thủ công
+      const isManager = config.manager.chatIds.includes(String(chatId))
+        || config.manager.chatIds.includes(String(senderId));
+      if (!isManager) {
+        await sendMessage(chatId, '❌ Chỉ quản lý mới được dùng lệnh RA thủ công.');
+        return;
+      }
+      result = await handleManualExit(parsed.params, senderName, config);
+    }
 
     if (result && result.replyMessages) {
       for (const msg of result.replyMessages) {
