@@ -95,8 +95,13 @@ async function bootstrap() {
       }
 
       // Process async
-      processMessageAsync(data).catch(err => {
+      processMessageAsync(data).catch(async (err) => {
         logger.error('Async processing failed', { error: err.message, stack: err.stack });
+        try {
+          await sendMessage(data.chatId, '❌ Có lỗi xảy ra khi xử lý tin nhắn. Vui lòng thử lại.');
+        } catch (sendErr) {
+          logger.error('Failed to notify user about error', { error: sendErr.message });
+        }
       });
 
     } catch (err) {
