@@ -27,8 +27,8 @@ const COLUMNS = {
     'Người xử lý', 'Thời điểm xử lý', 'Liên kết lượt xe',
   ],
   dailyReport: [
-    'Ngày', 'STT', 'Biển Số', 'Giờ Vào', 'Giờ Ra', 'Lưu (phút)',
-    'Ưu Tiên', 'Trạng Thái', 'Loại', 'Tổng Vào', 'Tổng Ra', 'Tồn Kho', 'TB Lưu (phút)',
+    'STT', 'Biển Số', 'Giờ Vào', 'Giờ Ra', 'Lưu (phút)',
+    'Ưu Tiên', 'Trạng Thái', 'Loại',
   ],
 };
 
@@ -62,7 +62,7 @@ async function ensureTabs() {
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
-    { key: 'dailyReport', name: tabNames.dailyReport, columns: COLUMNS.dailyReport },
+    // dailyReport: mỗi ngày tạo tab riêng trong writeDailyReportTab()
   ];
 
   const requests = [];
@@ -493,39 +493,53 @@ async function appendReviewRow(row) {
 }
 
 // ──────────────────────────────────────────────
-// BÁO CÁO HÀNG NGÀY (11 columns: A-K)
+// BÁO CÁO HÀNG NGÀY — mỗi ngày 1 tab riêng
 // ──────────────────────────────────────────────
 
 /**
- * Batch append rows to "BÁO CÁO HÀNG NGÀY".
- * Each row: { date, stt, plate, timeIn, timeOut, duration, priority, status, type, totalIn, totalOut, inWorkshop, avgDuration }
+ * Tạo tab mới cho ngày báo cáo (VD: "BC 20-03-2026"), ghi header + data.
+ * Nếu tab đã tồn tại thì bỏ qua (idempotent).
  */
-async function appendDailyReportRows(rows) {
-  const values = rows.map(r => [
-    r.date || '',
-    r.stt || '',
-    r.plate || '',
-    r.timeIn || '',
-    r.timeOut || '',
-    r.duration || '',
-    r.priority || '',
-    r.status || '',
-    r.type || '',
-    r.totalIn || '',
-    r.totalOut || '',
-    r.inWorkshop || '',
-    r.avgDuration || '',
-  ]);
+async function writeDailyReportTab(tabName, rows) {
+  // Tạo tab mới nếu chưa có
+  const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const existing = spreadsheet.data.sheets.map(s => s.properties.title);
 
-  await sheetsApi.spreadsheets.values.append({
+  if (!existing.includes(tabName)) {
+    await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: tabName } } }],
+      },
+    });
+    logger.info(`Created daily report tab: "${tabName}"`);
+  }
+
+  // Ghi header + data
+  const header = COLUMNS.dailyReport;
+  const values = [
+    header,
+    ...rows.map(r => [
+      r.stt || '',
+      r.plate || '',
+      r.timeIn || '',
+      r.timeOut || '',
+      r.duration || '',
+      r.priority || '',
+      r.status || '',
+      r.type || '',
+    ]),
+  ];
+
+  const range = `'${tabName}'!A1:${colLetter(header.length)}${values.length}`;
+  await sheetsApi.spreadsheets.values.update({
     spreadsheetId,
-    range: `'${tabNames.dailyReport}'!A:M`,
+    range,
     valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
   });
 
-  logger.info('Appended daily report rows', { count: rows.length });
+  logger.info('Wrote daily report tab', { tabName, rows: rows.length });
 }
 
 // ──────────────────────────────────────────────
@@ -569,5 +583,5 @@ module.exports = {
   appendLogRow,
   updateLogResult,
   appendReviewRow,
-  appendDailyReportRows,
+  writeDailyReportTab,
 };

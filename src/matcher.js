@@ -490,14 +490,17 @@ async function handleFullReport(config) {
   const data = await db.getFullDailyReport(tz);
   const parts = [];
 
-  // ── Header + Tổng quan ──
+  // ── Header + Tổng quan (tồn kho nổi bật) ──
   const avgStr = data.avgDuration > 0 ? utils.formatDuration(data.avgDuration) : 'N/A';
   let header = `📊 BÁO CÁO TỔNG HỢP — ${data.today}`;
   header += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-  header += `\n\n📋 TỔNG QUAN`;
-  header += `\n  Vào: ${data.totalIn} | Ra: ${data.totalOut} | Xưởng: ${data.inWorkshopCount}`;
-  header += `\n  TB hoàn thành: ${avgStr}`;
-  if (data.pendingReview > 0) header += `\n  Cần kiểm tra: ${data.pendingReview} mục`;
+  header += `\n\n🔧 TỒN KHO: ${data.inWorkshopCount} xe đang trong xưởng`;
+  header += `\n📥 Vào hôm nay: ${data.totalIn} xe`;
+  header += `\n✅ Ra hôm nay: ${data.totalOut} xe`;
+  header += `\n⏱ TB hoàn thành: ${avgStr}`;
+  if (data.warningCount > 0) header += `\n⚠️ Cảnh báo >24h: ${data.warningCount}`;
+  if (data.urgentCount > 0) header += `\n🚨 Khẩn >48h: ${data.urgentCount}`;
+  if (data.pendingReview > 0) header += `\n📋 Cần kiểm tra: ${data.pendingReview} mục`;
   parts.push(header);
 
   // ── Năng suất ──
@@ -516,44 +519,30 @@ async function handleFullReport(config) {
   }
   parts.push(prod);
 
-  // ── Xe ra hôm nay (chi tiết) ──
+  // ══════════════════════════════════════════════
+  // THỨ TỰ: Tồn kho (chưa ra) → Vào hôm nay → Xe đã ra
+  // Ưu tiên xe CHƯA RA lên trên, xe ĐÃ RA đẩy xuống
+  // ══════════════════════════════════════════════
+
   let stt = 1;
-  if (data.vehiclesOut.length > 0) {
-    let section = `✅ XE RA HÔM NAY (${data.vehiclesOut.length}):`;
-    for (const v of data.vehiclesOut) {
-      section += `\n  ${stt++}. ${utils.formatVehicleCompleted(v, tz)}`;
-    }
-    parts.push(section);
-  }
 
-  // ── Xe vào hôm nay, chưa ra ──
-  if (data.vehiclesInToday.length > 0) {
-    let section = `📥 XE VÀO HÔM NAY, CHƯA RA (${data.vehiclesInToday.length}):`;
-    for (const v of data.vehiclesInToday) {
-      section += `\n  ${stt++}. ${utils.formatVehicleInProgress(v, tz)}`;
-    }
-    parts.push(section);
-  }
-
-  // ── Tồn kho — đang trong xưởng ──
-  if (data.inWorkshop.length > 0) {
+  // ── 1. Tồn kho — xe từ trước, đang trong xưởng (ưu tiên cao nhất) ──
+  const oldStock = data.inWorkshop.filter(v =>
+    !data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId)
+  );
+  if (oldStock.length > 0) {
     const urgent  = [];
     const warning = [];
     const normal  = [];
 
-    for (const v of data.inWorkshop) {
-      const alreadyInToday = data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId);
-      if (alreadyInToday) continue;
+    for (const v of oldStock) {
       const line = { stt: stt++, text: utils.formatVehicleInProgress(v, tz) };
       if (v.priority === 'Khẩn')         urgent.push(line);
       else if (v.priority === 'Cảnh báo') warning.push(line);
       else                                normal.push(line);
     }
 
-    const oldStockCount = urgent.length + warning.length + normal.length;
-    let section = `🔧 TỒN KHO — ĐANG TRONG XƯỞNG (${data.inWorkshop.length}):`;
-    if (oldStockCount > 0) section += `\n  (Tồn từ trước: ${oldStockCount} xe)`;
-
+    let section = `🔧 TỒN KHO TỪ TRƯỚC (${oldStock.length} xe):`;
     if (urgent.length > 0) {
       section += `\n  Khẩn >48h (${urgent.length}):`;
       for (const v of urgent) section += `\n    ${v.stt}. ${v.text}`;
@@ -566,60 +555,84 @@ async function handleFullReport(config) {
       section += `\n  Bình thường (${normal.length}):`;
       for (const v of normal) section += `\n    ${v.stt}. ${v.text}`;
     }
+    parts.push(section);
+  }
 
+  // ── 2. Xe vào hôm nay, chưa ra ──
+  if (data.vehiclesInToday.length > 0) {
+    let section = `📥 VÀO HÔM NAY, CHƯA RA (${data.vehiclesInToday.length}):`;
+    for (const v of data.vehiclesInToday) {
+      section += `\n  ${stt++}. ${utils.formatVehicleInProgress(v, tz)}`;
+    }
+    parts.push(section);
+  }
+
+  // ── 3. Xe đã ra hôm nay (ưu tiên thấp nhất) ──
+  if (data.vehiclesOut.length > 0) {
+    let section = `✅ XE ĐÃ RA HÔM NAY (${data.vehiclesOut.length}):`;
+    for (const v of data.vehiclesOut) {
+      section += `\n  ${stt++}. ${utils.formatVehicleCompleted(v, tz)}`;
+    }
     parts.push(section);
   }
 
   const replyMessages = utils.splitIntoMessages(parts);
 
-  // Fire-and-forget: sync to Google Sheets
-  syncDailyReportToSheets(data);
+  // Fire-and-forget: sync to Google Sheets (mỗi ngày 1 tab)
+  syncDailyReportToSheets(data, tz);
 
   return { replyMessages };
 }
 
-function syncDailyReportToSheets(data) {
+function syncDailyReportToSheets(data, tz) {
+  // Tab name: "BC dd-MM-yyyy"
+  const tabName = `BC ${data.today.replace(/\//g, '-')}`;
   const sheetRows = [];
   let stt = 1;
 
-  for (const v of data.vehiclesOut) {
+  // 1. Tồn kho từ trước (lên trên)
+  const oldStock = data.inWorkshop.filter(v =>
+    !data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId)
+  );
+  for (const v of oldStock) {
     sheetRows.push({
-      date: data.today, stt: String(stt++), plate: v.plate,
-      timeIn: v.timeIn, timeOut: v.timeOut,
-      duration: v.durationMinutes != null ? String(v.durationMinutes) : '',
-      priority: v.priority, status: v.status, type: 'RA HÔM NAY',
+      stt: String(stt++), plate: v.plate,
+      timeIn: v.timeIn, timeOut: '',
+      duration: '', priority: v.priority, status: 'Đang trong xưởng',
+      type: 'TỒN KHO',
     });
   }
 
+  // 2. Vào hôm nay, chưa ra
   for (const v of data.vehiclesInToday) {
     sheetRows.push({
-      date: data.today, stt: String(stt++), plate: v.plate,
+      stt: String(stt++), plate: v.plate,
       timeIn: v.timeIn, timeOut: '',
-      duration: '', priority: v.priority, status: v.status, type: 'VÀO HÔM NAY',
+      duration: '', priority: v.priority, status: 'Đang trong xưởng',
+      type: 'VÀO HÔM NAY',
     });
   }
 
-  for (const v of data.inWorkshop) {
-    const alreadyListed = data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId);
-    if (alreadyListed) continue;
+  // 3. Xe đã ra (xuống dưới)
+  for (const v of data.vehiclesOut) {
     sheetRows.push({
-      date: data.today, stt: String(stt++), plate: v.plate,
-      timeIn: v.timeIn, timeOut: '',
-      duration: '', priority: v.priority, status: v.status, type: 'TRONG XƯỞNG',
+      stt: String(stt++), plate: v.plate,
+      timeIn: v.timeIn, timeOut: v.timeOut,
+      duration: v.durationMinutes != null ? String(v.durationMinutes) : '',
+      priority: v.priority, status: 'Đã ra xưởng',
+      type: 'ĐÃ RA',
     });
   }
 
-  // Summary row
+  // Dòng tổng kết
   sheetRows.push({
-    date: data.today, stt: '', plate: '── TỔNG KẾT ──',
-    timeIn: '', timeOut: '', duration: '', priority: '', status: '',
-    type: '── TỔNG KẾT ──',
-    totalIn: String(data.totalIn), totalOut: String(data.totalOut),
-    inWorkshop: String(data.inWorkshopCount),
-    avgDuration: data.avgDuration > 0 ? String(data.avgDuration) : '',
+    stt: '', plate: `TỒN KHO: ${data.inWorkshopCount} xe`,
+    timeIn: `Vào: ${data.totalIn}`, timeOut: `Ra: ${data.totalOut}`,
+    duration: data.avgDuration > 0 ? `TB: ${data.avgDuration}p` : '',
+    priority: '', status: '', type: 'TỔNG KẾT',
   });
 
-  sheetsSync.syncDailyReport(data.today, sheetRows);
+  sheetsSync.syncDailyReport(tabName, sheetRows);
 }
 
 async function sendScheduledFullReport(config) {
