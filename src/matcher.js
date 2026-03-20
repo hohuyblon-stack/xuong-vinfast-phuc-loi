@@ -648,6 +648,49 @@ async function sendScheduledFullReport(config) {
 }
 
 // ──────────────────────────────────────────────
+// NHAC XAC NHAN XE RA cuoi ca (17:00)
+// ──────────────────────────────────────────────
+
+async function sendEndOfDayReminder(config) {
+  const tz       = config.timezone;
+  const vehicles = await db.getAllInWorkshop(tz);
+
+  // Filter xe vào hôm nay hoặc hôm qua mà chưa ra
+  const { DateTime } = require('luxon');
+  const now       = DateTime.now().setZone(tz);
+  const yesterday = now.minus({ days: 1 });
+
+  const recentVehicles = vehicles.filter(v => {
+    if (!v.timeIn) return false;
+    const match = v.timeIn.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!match) return false;
+    const day = parseInt(match[1]), month = parseInt(match[2]);
+    const isToday     = day === now.day && month === now.month;
+    const isYesterday = day === yesterday.day && month === yesterday.month;
+    return isToday || isYesterday;
+  });
+
+  if (recentVehicles.length === 0) {
+    logger.info('End-of-day reminder: no recent vehicles pending exit');
+    return;
+  }
+
+  let msg = `🔔 Nhắc xác nhận xe ra xưởng\n`;
+  msg += `\nCó ${recentVehicles.length} xe chưa ghi nhận RA:\n`;
+
+  for (const v of recentVehicles) {
+    const hours = utils.hoursSince(v.timeIn, tz);
+    msg += `\n${v.plate} — vào lúc ${utils.extractTime(v.timeIn)} (${utils.formatHours(hours)} trước)`;
+  }
+
+  msg += `\n\n👉 Xe nào đã ra, chụp lại ảnh biển số gửi vào đây.`;
+  msg += `\n👉 Hoặc gõ: RA 30A-12345 để ghi nhận thủ công.`;
+
+  await notifyManagers(msg, config);
+  logger.info('End-of-day reminder sent', { count: recentVehicles.length });
+}
+
+// ──────────────────────────────────────────────
 // RA THU CONG (manual exit via text command)
 // ──────────────────────────────────────────────
 
@@ -720,4 +763,5 @@ module.exports = {
   handleFullReport,
   sendScheduledFullReport,
   handleManualExit,
+  sendEndOfDayReminder,
 };

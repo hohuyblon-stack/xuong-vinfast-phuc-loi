@@ -20,6 +20,7 @@ const {
   handleFullReport,
   sendScheduledFullReport,
   handleManualExit,
+  sendEndOfDayReminder,
 } = require('./matcher');
 const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
 const { isValidWebhookSecret, isValidAdminKey } = require('./middleware');
@@ -233,11 +234,43 @@ async function bootstrap() {
     }
   }, 30 * 60 * 1000);
 
-  // Bao cao tu dong cuoi ngay
+  // Nhac xac nhan xe ra luc 17:00
+  scheduleEndOfDayReminder();
+
+  // Bao cao tu dong cuoi ngay luc 18:00
   scheduleDailyReport();
 
   // Tu dong don dep xe ket moi ngay luc 5h sang
   scheduleStaleCleanup();
+}
+
+function scheduleEndOfDayReminder() {
+  const REMINDER_HOUR = 17;
+  const chatIds = config.manager.chatIds;
+
+  if (chatIds.length === 0) {
+    logger.info('No manager chat IDs - end-of-day reminder disabled');
+    return;
+  }
+
+  let lastReminderDate = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (currentHour === REMINDER_HOUR && lastReminderDate !== todayStr) {
+      lastReminderDate = todayStr;
+      try {
+        await sendEndOfDayReminder(config);
+      } catch (err) {
+        logger.error('End-of-day reminder failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`End-of-day reminder scheduled at ${REMINDER_HOUR}:00`);
 }
 
 function scheduleStaleCleanup() {
