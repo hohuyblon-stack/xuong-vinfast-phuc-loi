@@ -7,7 +7,7 @@ const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets } = require('./sheets');
 const { initDb, testConnection, isMessageProcessed, expireStaleVehicles, forceExitVehicle, countInWorkshop } = require('./db');
-const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook } = require('./telegram');
+const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook, getWebhookInfo } = require('./telegram');
 const {
   processVehicleEvent,
   checkTimeAlerts,
@@ -54,6 +54,17 @@ async function bootstrap() {
   // Health check
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
+  });
+
+  // Webhook health check + auto-heal
+  app.get('/health/webhook', async (_req, res) => {
+    try {
+      const result = await ensureWebhook();
+      res.json(result);
+    } catch (err) {
+      logger.error('Webhook health check failed', { error: err.message });
+      res.status(500).json({ status: 'error', error: err.message });
+    }
   });
 
   // Admin route protection middleware
@@ -242,6 +253,9 @@ async function bootstrap() {
 
   // Tu dong don dep xe ket moi ngay luc 5h sang
   scheduleStaleCleanup();
+
+  // Tu dong kiem tra va heal webhook moi 30 phut
+  scheduleWebhookCheck();
 }
 
 function scheduleEndOfDayReminder() {
@@ -299,6 +313,45 @@ function scheduleStaleCleanup() {
   }, 60 * 1000);
 
   logger.info(`Stale vehicle cleanup scheduled at 05:00 (>${STALE_DAYS} days)`);
+}
+
+// ──────────────────────────────────────────────
+// Webhook self-heal
+// ──────────────────────────────────────────────
+
+async function ensureWebhook() {
+  if (!config.telegram.webhookUrl) {
+    return { status: 'skipped', reason: 'TELEGRAM_WEBHOOK_URL not configured' };
+  }
+
+  const expectedUrl = `${config.telegram.webhookUrl}/webhook/telegram`;
+  const info = await getWebhookInfo();
+
+  if (info.url === expectedUrl) {
+    return { status: 'ok', url: info.url, pending: info.pending_update_count };
+  }
+
+  logger.warn('Webhook missing or wrong — auto-healing', { current: info.url, expected: expectedUrl });
+  await setWebhook(expectedUrl, config.telegram.webhookSecret);
+  const verified = await getWebhookInfo();
+  logger.info('Webhook auto-healed', { url: verified.url });
+
+  return { status: 'healed', previousUrl: info.url, newUrl: verified.url, pending: verified.pending_update_count };
+}
+
+function scheduleWebhookCheck() {
+  setInterval(async () => {
+    try {
+      const result = await ensureWebhook();
+      if (result.status === 'healed') {
+        logger.warn('Periodic webhook check: auto-healed', result);
+      }
+    } catch (err) {
+      logger.error('Periodic webhook check failed', { error: err.message });
+    }
+  }, 30 * 60 * 1000);
+
+  logger.info('Webhook self-heal check scheduled every 30 minutes');
 }
 
 // ──────────────────────────────────────────────

@@ -114,12 +114,11 @@ async function sendMessage(chatId, message) {
  * Đặt webhook URL cho Telegram Bot.
  * @param {string} url - Webhook URL (HTTPS)
  */
-async function setWebhook(url) {
+async function setWebhook(url, secret) {
   try {
-    const response = await axios.post(`${TELEGRAM_API}${botToken}/setWebhook`, {
-      url,
-      allowed_updates: ['message'],
-    }, { timeout: 10000 });
+    const body = { url, allowed_updates: ['message'] };
+    if (secret) body.secret_token = secret;
+    const response = await axios.post(`${TELEGRAM_API}${botToken}/setWebhook`, body, { timeout: 10000 });
 
     logger.info('Telegram webhook set', { url, ok: response.data.ok });
     return response.data;
@@ -129,4 +128,13 @@ async function setWebhook(url) {
   }
 }
 
-module.exports = { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook };
+/**
+ * Lấy thông tin webhook hiện tại từ Telegram.
+ * @returns {object} - { url, pending_update_count, ... }
+ */
+async function getWebhookInfo() {
+  const response = await axios.get(`${TELEGRAM_API}${botToken}/getWebhookInfo`, { timeout: 10000 });
+  return response.data.result;
+}
+
+module.exports = { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook, getWebhookInfo };
