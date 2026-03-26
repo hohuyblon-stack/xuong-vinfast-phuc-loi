@@ -65,7 +65,57 @@ GOOGLE_SHEET_ID=<sheet_id>
 
 ---
 
-## BƯỚC 3: GOOGLE CLOUD SERVICE ACCOUNT SETUP
+## BƯỚC 3: SUPABASE POSTGRESQL SETUP (Source of Truth)
+
+### 3a. Tạo Supabase Project
+- [ ] Vào https://supabase.com
+- [ ] Click **Sign Up** (dùng Google hoặc GitHub account)
+- [ ] Click **New Project**
+- [ ] **Project Details:**
+  - Name: `xuong-vinfast` (hoặc tên khác)
+  - Database Password: Set mật khẩu mạnh (lưu giữ an toàn!)
+  - Region: **Singapore** (gần Việt Nam nhất)
+  - Click **Create new project**
+- [ ] **Chờ 2-3 phút** cho project tạo xong
+
+### 3b. Lấy Supabase Credentials
+- [ ] Vào project > **Settings** → **API**
+- [ ] **Copy 2 giá trị:**
+  - **Project URL** (dạng: `https://xxxxx.supabase.co`)
+  - **Service Role Key** (dạng: `eyJhbGc...`)
+  - ⚠️ **IMPORTANT**: Service Role Key = SECRET (giữ bí mật, không share!)
+
+**Lưu vào .env:**
+```env
+SUPABASE_URL=<project_url>
+SUPABASE_SERVICE_KEY=<service_role_key>
+```
+
+### 3c. Tạo Database Schema
+- [ ] Vào project > **SQL Editor** (bên trái)
+- [ ] Click **New Query**
+- [ ] Mở file: `supabase/migrations/001-init-schema.sql` (trong repo)
+- [ ] **Copy toàn bộ nội dung** file SQL
+- [ ] **Paste vào SQL Editor** ở Supabase
+- [ ] Click **Run** (hoặc Ctrl+Enter)
+- [ ] **Chờ cho đến khi thấy** "✓ Success"
+
+### 3d. Verify Schema Created
+- [ ] Vào **Table Editor** (bên trái)
+- [ ] Nên thấy 3 table:
+  - [ ] `vehicles` (DANH SÁCH CHÍNH)
+  - [ ] `events` (NHẬT KÝ)
+  - [ ] `reviews` (CẦN KIỂM TRA)
+- [ ] Click vào từng table để kiểm tra columns
+
+**Nếu lỗi SQL:**
+- [ ] Copy-paste lại từng phần (chia nhỏ query)
+- [ ] Kiểm tra comment (dòng `--`) không bị lỗi
+- [ ] Xem error message cụ thể
+
+---
+
+## BƯỚC 4: GOOGLE CLOUD SERVICE ACCOUNT SETUP
 
 ### 3a. Vào Google Cloud Console
 - [ ] Truy cập https://console.cloud.google.com
@@ -114,7 +164,7 @@ GOOGLE_CREDENTIALS_JSON=<toàn bộ nội dung file JSON, copy từ đầu đế
 
 ---
 
-## BƯỚC 4: ENVIRONMENT VARIABLES
+## BƯỚC 5: ENVIRONMENT VARIABLES
 
 ### Chuẩn bị file .env
 Tạo file `.env` tại root repo với nội dung:
@@ -131,6 +181,15 @@ TELEGRAM_BOT_TOKEN=<your_bot_token>
 # Sẽ được cập nhật sau khi deploy (vd: https://xuong-vinfast-bot.onrender.com)
 TELEGRAM_WEBHOOK_URL=
 
+# ─────────────────────────────────────────────
+# Supabase PostgreSQL (Source of Truth)
+# ─────────────────────────────────────────────
+SUPABASE_URL=<your_supabase_url>
+SUPABASE_SERVICE_KEY=<your_service_role_key>
+
+# ─────────────────────────────────────────────
+# Google Sheets (Read-only mirror)
+# ─────────────────────────────────────────────
 # Google Sheet ID
 GOOGLE_SHEET_ID=<your_sheet_id>
 
@@ -140,6 +199,9 @@ GOOGLE_CREDENTIALS_JSON=<paste_json_content_here>
 # OCR Confidence Thresholds
 OCR_CONFIDENCE_HIGH=0.8
 OCR_CONFIDENCE_MEDIUM=0.5
+
+# Min time in workshop before allowing RA (minutes)
+MIN_WORKSHOP_MINUTES=3
 
 # Cảnh báo thời gian lưu (giờ)
 ALERT_HOURS_WARNING=24
@@ -167,7 +229,7 @@ TIMEZONE=Asia/Ho_Chi_Minh
 
 ---
 
-## BƯỚC 5: DEPLOY TO CLOUD
+## BƯỚC 6: DEPLOY TO CLOUD
 
 ### Option A: RENDER.COM (Recommended)
 
@@ -185,7 +247,12 @@ TIMEZONE=Asia/Ho_Chi_Minh
   - Start Command: `npm start`
 - [ ] **Add Environment Variables:**
   - Paste tất cả variables từ `.env` (vì Render sẽ ăn từ ENV)
-  - Quan trọng: `TELEGRAM_BOT_TOKEN`, `GOOGLE_SHEET_ID`, `GOOGLE_CREDENTIALS_JSON`
+  - **CRITICAL VARIABLES:**
+    - `TELEGRAM_BOT_TOKEN` (from BotFather)
+    - `SUPABASE_URL` (from Supabase Settings > API)
+    - `SUPABASE_SERVICE_KEY` (from Supabase Settings > API)
+    - `GOOGLE_SHEET_ID` (from Google Sheet URL)
+    - `GOOGLE_CREDENTIALS_JSON` (from Google Service Account JSON file)
 - [ ] **Free Tier Settings:**
   - Auto Spin Down: tắt (để bot luôn chạy)
   - Nếu có credit, có thể nâng lên Starter plan
@@ -234,7 +301,7 @@ TIMEZONE=Asia/Ho_Chi_Minh
 
 ---
 
-## BƯỚC 6: TEST BOT
+## BƯỚC 7: TEST BOT
 
 ### 6a. Health Check
 - [ ] Curl health endpoint:

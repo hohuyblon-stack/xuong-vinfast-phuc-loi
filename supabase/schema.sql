@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
   image_out_url    TEXT,
   status           TEXT NOT NULL DEFAULT 'Đang trong xưởng',
   priority         TEXT NOT NULL DEFAULT 'Bình thường',
+  vehicle_model    TEXT NOT NULL DEFAULT '',
   note             TEXT NOT NULL DEFAULT '',
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -27,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_vehicles_status        ON vehicles (status);
 CREATE INDEX IF NOT EXISTS idx_vehicles_time_in       ON vehicles (time_in);
 CREATE INDEX IF NOT EXISTS idx_vehicles_time_out      ON vehicles (time_out);
 CREATE INDEX IF NOT EXISTS idx_vehicles_vehicle_id    ON vehicles (vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_vehicles_model         ON vehicles (vehicle_model);
 
 -- ─────────────────────────────────────────
 -- NHẬT KÝ (events)
@@ -97,7 +99,8 @@ CREATE OR REPLACE FUNCTION process_vehicle(
   p_vehicle_id         TEXT,
   p_now_ts             TIMESTAMPTZ,
   p_image_url          TEXT,
-  p_min_workshop_secs  INTEGER DEFAULT 900
+  p_min_workshop_secs  INTEGER DEFAULT 900,
+  p_vehicle_model      TEXT DEFAULT ''
 )
 RETURNS TABLE(
   action      TEXT,
@@ -147,9 +150,9 @@ BEGIN
   ELSE
     -- No active row → new entry (VAO)
     INSERT INTO vehicles (
-      vehicle_id, plate, time_in, image_in_url, status, priority, updated_at
+      vehicle_id, plate, time_in, image_in_url, status, priority, vehicle_model, updated_at
     ) VALUES (
-      p_vehicle_id, p_plate, p_now_ts, p_image_url, 'Đang trong xưởng', 'Bình thường', now()
+      p_vehicle_id, p_plate, p_now_ts, p_image_url, 'Đang trong xưởng', 'Bình thường', p_vehicle_model, now()
     );
 
     RETURN QUERY

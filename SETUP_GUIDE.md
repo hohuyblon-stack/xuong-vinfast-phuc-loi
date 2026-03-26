@@ -24,7 +24,24 @@ Hệ thống tracking xe vào/ra xưởng VinFast Phúc Lợi đã sẵn sàng v
   - `CAN KIEM TRA` (cột: errorId, eventId, timestamp, imageUrl, plateAI, reason, suggestion, reviewStatus)
 - **Lưu Sheet ID** từ URL: `https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit`
 
-### **3. Tạo Google Service Account**
+### **3. Tạo Supabase Database (PostgreSQL — Source of Truth)**
+- Vào https://supabase.com → **Sign Up** (miễn phí)
+- Click **New Project**
+  - Tên project: "xuong-vinfast" (hoặc tuỳ chọn)
+  - Chọn region: **Singapore** (gần Việt Nam nhất)
+  - Đặt mật khẩu database (lưu giữ an toàn!)
+- Đợi project tạo xong (~2 phút)
+- Vào **Settings** → **API** → Copy:
+  - **Project URL** (dạng: `https://xxxxx.supabase.co`)
+  - **Service Role Key** (dạng: `eyJhbGc...`)
+  - ⚠️ **IMPORTANT**: Service Role Key có quyền admin — giữ bí mật!
+- Vào **SQL Editor** → Click **New Query**
+- Copy toàn bộ nội dung từ `supabase/migrations/001-init-schema.sql`
+- Paste vào SQL editor → Click **Run**
+- Đợi cho đến khi thấy "✓ Success"
+- **Verify**: Vào **Table Editor** → Nên thấy 3 table: `vehicles`, `events`, `reviews`
+
+### **4. Tạo Google Service Account**
 - Vào https://console.cloud.google.com
 - Tạo project mới hoặc dùng project cũ
 - Bật APIs:
@@ -77,38 +94,79 @@ Chọn 1 trong các option:
 Tạo file `.env` (hoặc set trên platform) với các giá trị:
 
 ```env
-# Server
+# ═══════════════════════════════════════════════════════════
+# Server Configuration
+# ═══════════════════════════════════════════════════════════
 PORT=3000
 NODE_ENV=production
 
+# ═══════════════════════════════════════════════════════════
 # Telegram Bot Token (từ BotFather)
+# ═══════════════════════════════════════════════════════════
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 
 # Server URL (để bot set webhook, bỏ trống nếu chỉ dùng polling)
 TELEGRAM_WEBHOOK_URL=https://your-app-domain.com
 
-# Google Sheet ID (từ URL sheet)
+# ═══════════════════════════════════════════════════════════
+# Supabase PostgreSQL (Source of Truth)
+# ═══════════════════════════════════════════════════════════
+# Project URL: từ Supabase > Settings > API
+# Dạng: https://xxxxx.supabase.co
+SUPABASE_URL=https://xxxxx.supabase.co
+
+# Service Role Key: từ Supabase > Settings > API (secret with admin access)
+# ⚠️ Keep this secret! Never commit to git.
+SUPABASE_SERVICE_KEY=eyJhbGc...
+
+# ═══════════════════════════════════════════════════════════
+# Google Sheets (Read-only mirror of Supabase data)
+# ═══════════════════════════════════════════════════════════
+# Sheet ID: từ URL https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit
 GOOGLE_SHEET_ID=1abc2def3ghi4jkl5mno6pqr7stu8vwxyz
 
-# Google Credentials JSON (copy từ file Service Account)
+# Google Service Account Credentials (JSON)
+# Copy từ file JSON Service Account
+# ⚠️ Keep this secret! Never commit to git.
 GOOGLE_CREDENTIALS_JSON={"type":"service_account","project_id":"your-project","private_key":"-----BEGIN PRIVATE KEY-----\n...","client_email":"xuong-vinfast-bot@your-project.iam.gserviceaccount.com"}
 
-# OCR Confidence Thresholds
+# ═══════════════════════════════════════════════════════════
+# OCR Settings (Google Cloud Vision)
+# ═══════════════════════════════════════════════════════════
+# Confidence threshold for HIGH confidence (0-1.0)
 OCR_CONFIDENCE_HIGH=0.8
+
+# Confidence threshold for MEDIUM confidence (0-1.0)
 OCR_CONFIDENCE_MEDIUM=0.5
 
-# Canh bao
+# ═══════════════════════════════════════════════════════════
+# Alert Settings
+# ═══════════════════════════════════════════════════════════
+# Minimum time in workshop before allowing RA (minutes)
+# Prevents false RA from burst photos (default: 3 min = 180 sec)
+MIN_WORKSHOP_MINUTES=3
+
+# Hours before marking as WARNING (yellow alert)
 ALERT_HOURS_WARNING=24
+
+# Hours before marking as URGENT (red alert)
 ALERT_HOURS_URGENT=48
 
-# Telegram Chat ID Quản Lý (nhận cảnh báo)
+# ═══════════════════════════════════════════════════════════
+# Manager Notifications
+# ═══════════════════════════════════════════════════════════
+# Telegram Chat IDs of managers (receive alerts)
 # Cách lấy: gửi /start cho @userinfobot trong Telegram
+# Comma-separated, no spaces
 MANAGER_CHAT_IDS=123456789,987654321
 
-# Giờ gửi báo cáo tổng hợp (0-23, 18 = 6PM)
+# Hour to send daily report (0-23, 18 = 6PM)
 DAILY_REPORT_HOUR=18
 
+# ═══════════════════════════════════════════════════════════
 # Timezone
+# ═══════════════════════════════════════════════════════════
+# https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 TIMEZONE=Asia/Ho_Chi_Minh
 ```
 

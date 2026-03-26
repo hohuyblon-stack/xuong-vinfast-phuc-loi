@@ -7,9 +7,17 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "node --test 'test/**/*.test.js'",
-    "check-alerts": "node src/scripts/check-alerts.js"
+    "check-alerts": "node src/scripts/check-alerts.js",
+    "openclaw": "node openclaw/agent.js",
+    "openclaw:check": "OPENCLAW_RUN_ONCE=1 node openclaw/agent.js"
   },
-  "keywords": ["vinfast", "telegram", "ocr", "license-plate", "google-sheets"],
+  "keywords": [
+    "vinfast",
+    "telegram",
+    "ocr",
+    "license-plate",
+    "google-sheets"
+  ],
   "license": "UNLICENSED",
   "private": true,
   "engines": {
@@ -23,6 +31,8 @@
     "express": "^4.21.1",
     "googleapis": "^144.0.0",
     "luxon": "^3.5.0",
+    "node-cron": "^4.2.1",
+    "pg": "^8.20.0",
     "winston": "^3.17.0",
     "xlsx": "^0.18.5"
   },

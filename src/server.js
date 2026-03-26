@@ -19,6 +19,8 @@ const {
   handleAccountingReport,
   handleFullReport,
   sendScheduledFullReport,
+  handleMorningBriefing,
+  sendScheduledMorningBriefing,
   handleManualExit,
   sendEndOfDayReminder,
 } = require('./matcher');
@@ -136,6 +138,17 @@ async function bootstrap() {
     }
   });
 
+  // Admin: trigger morning briefing
+  app.post('/admin/morning-briefing', requireAdminKey, async (_req, res) => {
+    try {
+      const report = await handleMorningBriefing(config);
+      res.json({ status: 'ok', report: report.replyMessages });
+    } catch (err) {
+      logger.error('Morning briefing failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: trigger daily report (full combined report)
   app.post('/admin/daily-report', requireAdminKey, async (_req, res) => {
     try {
@@ -247,6 +260,9 @@ async function bootstrap() {
 
   // Nhac xac nhan xe ra luc 17:00
   scheduleEndOfDayReminder();
+
+  // Bao cao sang luc 7:00
+  scheduleMorningBriefing();
 
   // Bao cao tu dong cuoi ngay luc 18:00
   scheduleDailyReport();
@@ -456,6 +472,39 @@ async function processMessageAsync(data) {
   await checkTimeAlerts(config).catch(err => {
     logger.error('Post-event alert check failed', { error: err.message });
   });
+}
+
+// ──────────────────────────────────────────────
+// Scheduled morning briefing
+// ──────────────────────────────────────────────
+
+function scheduleMorningBriefing() {
+  const morningHour = config.manager.morningReportHour || 7;
+  const chatIds = config.manager.chatIds;
+
+  if (chatIds.length === 0) {
+    logger.info('No manager chat IDs - morning briefing disabled');
+    return;
+  }
+
+  let lastBriefingDate = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (currentHour === morningHour && lastBriefingDate !== todayStr) {
+      lastBriefingDate = todayStr;
+      try {
+        await sendScheduledMorningBriefing(config);
+      } catch (err) {
+        logger.error('Morning briefing failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`Morning briefing scheduled at ${morningHour}:00`);
 }
 
 // ──────────────────────────────────────────────

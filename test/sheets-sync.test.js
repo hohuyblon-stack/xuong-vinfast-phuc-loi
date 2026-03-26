@@ -123,19 +123,30 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     mockLogger.warn = () => {};
   });
 
-  it('syncVehicleOut — updates row when found', async () => {
+  it('syncVehicleOut — updates, archives, and deletes row when found', async () => {
     let updateCalled = false;
-    mockSheets.findMainRow = async () => ({ rowIndex: 5 });
+    let archiveCalled = false;
+    let deleteCalled = false;
+    mockSheets.findMainRow = async () => ({ rowIndex: 5, data: { plate: '30A-12345', status: 'Đang trong xưởng' } });
     mockSheets.updateMainRow = async (rowIndex, updates) => {
       updateCalled = true;
       assert.equal(rowIndex, 5);
-      assert.ok(updates.status || updates.timeOut || updates.duration);
+    };
+    mockSheets.archiveCompletedVehicle = async (rowData) => {
+      archiveCalled = true;
+      assert.ok(rowData.plate);
+    };
+    mockSheets.deleteMainRow = async (rowIndex) => {
+      deleteCalled = true;
+      assert.equal(rowIndex, 5);
     };
 
     sheetsSync.syncVehicleOut('30A-12345', 'LX-001', { status: 'Đã ra xưởng', timeOut: '08/03/2026 10:00:00' });
     await tick();
 
     assert.ok(updateCalled, 'updateMainRow must be called');
+    assert.ok(archiveCalled, 'archiveCompletedVehicle must be called');
+    assert.ok(deleteCalled, 'deleteMainRow must be called');
     assert.equal(lastLoggedError, null);
   });
 

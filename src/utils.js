@@ -163,13 +163,14 @@ function formatVehicleCompleted(v, tz) {
 
 /**
  * Format xe đang trong xưởng.
- * "🚨 51F-45678 — Vào 16/03 08:15 (96h)"
+ * "🚨 51F-45678 (VF 8) — Vào 16/03 08:15 (96h)"
  */
 function formatVehicleInProgress(v, tz) {
   const hours = hoursSince(v.timeIn, tz);
   const icon  = v.priority === 'Khẩn' ? '🚨' : v.priority === 'Cảnh báo' ? '⚠️' : '🔧';
   const dateTime = extractDateTimeShort(v.timeIn, tz);
-  return `${icon} ${v.plate} — Vào ${dateTime} (${formatHours(hours)})`;
+  const modelStr = v.vehicleModel ? ` (${v.vehicleModel})` : '';
+  return `${icon} ${v.plate}${modelStr} — Vào ${dateTime} (${formatHours(hours)})`;
 }
 
 /**
@@ -224,6 +225,319 @@ function confidenceLabel(confidence, thresholds) {
   return 'Mo / khong chac';
 }
 
+// ──────────────────────────────────────────────
+// Smart report formatters
+// ──────────────────────────────────────────────
+
+const intel = require('./report-intelligence');
+
+/**
+ * Format KPI dashboard (section 1 of evening report).
+ */
+function formatKPIDashboard({ data, weeklyAvg, capacityForecast }) {
+  const avgStr = data.avgDuration > 0 ? formatDuration(data.avgDuration) : 'N/A';
+  const fastStr = data.fastestVehicle ? formatHours(data.fastestVehicle.durationMinutes / 60) : 'N/A';
+  const slowStr = data.slowestVehicle ? formatHours(data.slowestVehicle.durationMinutes / 60) : 'N/A';
+
+  let s = `📊 BÁO CÁO CUỐI NGÀY — ${data.today}`;
+  s += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n\n🔢 TỔNG QUAN`;
+  s += `\n    Tồn kho: ${data.inWorkshopCount}/${capacityForecast.available + data.inWorkshopCount} │ Vào: ${data.totalIn} │ Ra: ${data.totalOut} │ Hoàn thành: ${data.completionRate}%`;
+  s += `\n    TB thời gian: ${avgStr} │ Nhanh nhất: ${fastStr} │ Chậm nhất: ${slowStr}`;
+
+  // vs yesterday
+  const diffIn = data.totalIn - data.yesterdayIn;
+  const diffOut = data.totalOut - data.yesterdayOut;
+  const arrowIn  = diffIn > 0 ? `+${diffIn}↑` : diffIn < 0 ? `${diffIn}↓` : '→';
+  const arrowOut = diffOut > 0 ? `+${diffOut}↑` : diffOut < 0 ? `${diffOut}↓` : '→';
+  s += `\n\n    So hôm qua:  Vào ${arrowIn} │ Ra ${arrowOut}`;
+
+  // vs 7-day avg
+  if (weeklyAvg.avgDailyIn > 0) {
+    const trend = intel.compareToBaseline(data.totalIn, weeklyAvg.avgDailyIn);
+    if (Math.abs(trend.pctChange) <= 15) {
+      s += `\n    So 7 ngày:   ✅ Bình thường (${trend.label})`;
+    } else if (trend.pctChange > 0) {
+      s += `\n    So 7 ngày:   ↑ Nhiều hơn ${Math.abs(trend.pctChange)}%`;
+    } else {
+      s += `\n    So 7 ngày:   ↓ Ít hơn ${Math.abs(trend.pctChange)}%`;
+    }
+  }
+
+  // Capacity
+  s += `\n\n    Capacity:    ${data.inWorkshopCount}/${capacityForecast.available + data.inWorkshopCount} (${capacityForecast.utilizationPct}%) → ${capacityForecast.recommendation}`;
+
+  return s;
+}
+
+/**
+ * Format action-required section (section 2).
+ */
+function formatActionRequired(urgentVehicles, warningVehicles, tz) {
+  if (urgentVehicles.length === 0 && warningVehicles.length === 0) {
+    return null;
+  }
+
+  let stt = 1;
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n🚨 CẦN HÀNH ĐỘNG NGAY (${urgentVehicles.length + warningVehicles.length} xe)`;
+
+  if (urgentVehicles.length > 0) {
+    s += `\n\n    Khẩn >48h (${urgentVehicles.length} xe) — cần quyết định:`;
+    for (const v of urgentVehicles) {
+      const dateTime = extractDateTimeShort(v.timeIn, tz);
+      s += `\n      ${stt++}. 🚨 ${v.plate} — ${formatHours(v.hoursIn)}h (Vào ${dateTime})`;
+      s += `\n         👉 Liên hệ khách hoặc quyết định giữ/trả`;
+    }
+  }
+
+  if (warningVehicles.length > 0) {
+    s += `\n\n    Cảnh báo >24h (${warningVehicles.length} xe) — cần theo dõi:`;
+    for (const v of warningVehicles) {
+      const dateTime = extractDateTimeShort(v.timeIn, tz);
+      s += `\n      ${stt++}. ⚠️ ${v.plate} — ${formatHours(v.hoursIn)} (Vào ${dateTime})`;
+    }
+  }
+
+  return s;
+}
+
+/**
+ * Format predictive alerts (section 3).
+ */
+function formatPredictiveAlerts(predictions, tz) {
+  const { approaching24h, approaching48h } = predictions;
+  if (approaching24h.length === 0 && approaching48h.length === 0) return null;
+
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n⏰ SẮP CHẠM NGƯỠNG (12h tới)`;
+
+  if (approaching24h.length > 0) {
+    s += `\n\n    Chạm 24h: ${approaching24h.length} xe`;
+    for (const v of approaching24h) {
+      const eta = computeThresholdTime(v.timeIn, 24, tz);
+      s += `\n      • ${v.plate} — ${formatHours(v.hoursIn)} → chạm lúc ${eta}`;
+    }
+  }
+
+  if (approaching48h.length > 0) {
+    s += `\n\n    Chạm 48h: ${approaching48h.length} xe`;
+    for (const v of approaching48h) {
+      const eta = computeThresholdTime(v.timeIn, 48, tz);
+      s += `\n      • ${v.plate} — ${formatHours(v.hoursIn)} → chạm lúc ${eta}`;
+    }
+  }
+
+  return s;
+}
+
+/**
+ * Format today's entries with time buckets + exception highlighting (section 4).
+ */
+function formatTodayEntries(vehiclesInToday, vehiclesOut, durationStats, tz) {
+  const totalToday = vehiclesInToday.length + vehiclesOut.filter(v => {
+    // count vehicles that entered today and already exited
+    return true; // we count from data.totalIn instead
+  }).length;
+
+  if (vehiclesInToday.length === 0) return null;
+
+  // Split into morning/afternoon
+  const morning = [];
+  const afternoon = [];
+  for (const v of vehiclesInToday) {
+    const h = extractHour(v.timeIn);
+    if (h < 12) morning.push(v);
+    else afternoon.push(v);
+  }
+
+  // Find slow vehicles (exceeding p90 or > durationSlowHours)
+  const p90Hours = durationStats.p90 > 0 ? durationStats.p90 / 60 : 8;
+  const slowVehicles = vehiclesInToday.filter(v => {
+    const hours = hoursSince(v.timeIn, tz);
+    return hours > p90Hours;
+  });
+
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n📥 VÀO HÔM NAY, CHƯA RA (${vehiclesInToday.length} xe)`;
+
+  if (morning.length > 0) {
+    s += `\n\n    🌅 Sáng 6-12h: ${morning.length} xe`;
+  }
+  if (afternoon.length > 0) {
+    s += `\n    ☀️ Chiều 12-18h: ${afternoon.length} xe`;
+  }
+
+  if (slowVehicles.length > 0) {
+    const avgHoursStr = p90Hours > 0 ? formatHours(p90Hours) : 'N/A';
+    s += `\n\n    ⚠️ Chậm hơn bình thường (${slowVehicles.length} xe):`;
+    for (const v of slowVehicles.slice(0, 5)) {
+      const hours = hoursSince(v.timeIn, tz);
+      const dateTime = extractTime(v.timeIn);
+      s += `\n      • 🟠 ${v.plate} — Vào ${dateTime} (${formatHours(hours)}) — TB là ${avgHoursStr}`;
+    }
+    if (slowVehicles.length > 5) {
+      s += `\n      ... và ${slowVehicles.length - 5} xe nữa`;
+    }
+  }
+
+  const normalCount = vehiclesInToday.length - slowVehicles.length;
+  if (normalCount > 0) {
+    s += `\n\n    Còn lại ${normalCount} xe đang sửa — tiến độ bình thường 🟢`;
+  }
+
+  return s;
+}
+
+/**
+ * Format completed vehicles with buckets + progress bars (section 5).
+ */
+function formatCompletedSection(vehiclesOut, durationStats, weeklyAvg, tz) {
+  if (vehiclesOut.length === 0) return null;
+
+  const thresholds = { fast: 3, normal: 5, slow: 8 };
+  const buckets = intel.bucketCompletedVehicles(vehiclesOut, thresholds);
+  const total = vehiclesOut.length;
+
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n✅ ĐÃ RA HÔM NAY (${total} xe) — phân bố tốc độ`;
+
+  s += `\n\n    🟢 Nhanh (<3h):    ${String(buckets.fast.length).padStart(2)} xe ${intel.buildProgressBar(buckets.fast.length, total)}`;
+  s += `\n    🟡 TB (3-5h):      ${String(buckets.normal.length).padStart(2)} xe ${intel.buildProgressBar(buckets.normal.length, total)}`;
+  s += `\n    🟠 Chậm (5-8h):    ${String(buckets.slow.length).padStart(2)} xe ${intel.buildProgressBar(buckets.slow.length, total)}`;
+  s += `\n    🔴 Rất chậm (>8h): ${String(buckets.critical.length).padStart(2)} xe ${intel.buildProgressBar(buckets.critical.length, total)}`;
+
+  // fastest/slowest
+  const sorted = [...vehiclesOut].filter(v => v.durationMinutes != null).sort((a, b) => a.durationMinutes - b.durationMinutes);
+  if (sorted.length > 0) {
+    const fastest = sorted[0];
+    const slowest = sorted[sorted.length - 1];
+    s += `\n\n    Nhanh nhất: 🟢 ${fastest.plate} — ${formatHours(fastest.durationMinutes / 60)}`;
+    s += `\n    Chậm nhất:  🔴 ${slowest.plate} — ${formatHours(slowest.durationMinutes / 60)}`;
+  }
+
+  // average comparison
+  const todayAvg = vehiclesOut.reduce((sum, v) => sum + (v.durationMinutes || 0), 0) / (total || 1);
+  const todayAvgStr = formatHours(todayAvg / 60);
+  const weekAvgStr = weeklyAvg.avgDuration > 0 ? formatHours(weeklyAvg.avgDuration / 60) : 'N/A';
+  s += `\n    TB hôm nay: ${todayAvgStr} │ TB 7 ngày: ${weekAvgStr}`;
+
+  // list critical vehicles (>8h)
+  if (buckets.critical.length > 0) {
+    s += `\n\n    🔴 Xe chậm nhất (>8h) — kiểm tra nguyên nhân:`;
+    const critSorted = [...buckets.critical].sort((a, b) => (b.durationMinutes || 0) - (a.durationMinutes || 0));
+    for (const v of critSorted.slice(0, 5)) {
+      const tIn = extractTime(v.timeIn);
+      const tOut = extractTime(v.timeOut);
+      s += `\n      • ${v.plate} — ${formatHours(v.durationMinutes / 60)} (${tIn}→${tOut})`;
+    }
+  }
+
+  return s;
+}
+
+/**
+ * Format special attention section (section 6).
+ */
+function formatSpecialAttention(repeats, anomalies, tz) {
+  if (repeats.length === 0 && anomalies.length === 0) return null;
+
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n🔄 CHÚ Ý ĐẶC BIỆT`;
+
+  if (repeats.length > 0) {
+    s += `\n\n    Xe quay lại (14 ngày):`;
+    for (const r of repeats.slice(0, 3)) {
+      s += `\n      🔄 ${r.plate} — lần ${r.visitCount} trong 2 tuần`;
+      s += `\n         ← Kiểm tra chất lượng sửa chữa lần trước`;
+    }
+  }
+
+  if (anomalies.length > 0) {
+    s += `\n\n    Xe bất thường (lâu hơn 90% xe khác):`;
+    for (const a of anomalies.slice(0, 3)) {
+      s += `\n      📊 ${a.plate} — ${formatHours(a.actual)} (p90 = ${formatHours(a.expectedMax / 60)})`;
+      s += `\n         ← Có gì block? Thiếu phụ tùng?`;
+    }
+  }
+
+  return s;
+}
+
+/**
+ * Format end-of-day checklist (section 7).
+ */
+function formatChecklist(items) {
+  let s = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  s += `\n📋 CHECKLIST CUỐI NGÀY`;
+  for (const item of items) {
+    s += `\n    ☐ ${item.text}`;
+  }
+  return s;
+}
+
+/**
+ * Format morning briefing message.
+ */
+function formatMorningBriefing({ today, inWorkshopCount, urgentCount, warningCount, normalCount, capacityForecast, approaching24h, approaching48h, priorities }) {
+  let s = `☀️ SÁNG NAY — ${today}`;
+  s += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+  // Tồn kho
+  s += `\n\n🔢 TỒN KHO: ${inWorkshopCount} xe (capacity ${capacityForecast.available + inWorkshopCount} — còn ${capacityForecast.available} chỗ ${capacityForecast.utilizationPct < 70 ? '✅' : '⚠️'})`;
+  if (urgentCount > 0) s += `\n   🚨 Khẩn >48h: ${urgentCount} xe → CẦN XỬ LÝ HÔM NAY`;
+  if (warningCount > 0) s += `\n   ⚠️ >24h: ${warningCount} xe`;
+  s += `\n   🔧 Bình thường: ${normalCount} xe`;
+
+  // Sắp chạm ngưỡng
+  if (approaching24h.length > 0 || approaching48h.length > 0) {
+    s += `\n\n⏰ SẮP CHẠM NGƯỠNG:`;
+    if (approaching24h.length > 0) s += `\n   Chạm 24h hôm nay: ${approaching24h.length} xe`;
+    if (approaching48h.length > 0) {
+      s += `\n   Chạm 48h hôm nay: ${approaching48h.length} xe`;
+      for (const v of approaching48h.slice(0, 3)) {
+        const eta = computeThresholdTime(v.timeIn, 48, 'Asia/Ho_Chi_Minh');
+        s += `\n   • ${v.plate} — chạm 48h lúc ${eta} (còn ${formatHours(v.hoursUntil)}) ← GẤP`;
+      }
+    }
+  }
+
+  // Ưu tiên
+  if (priorities.length > 0) {
+    s += `\n\n📋 ƯU TIÊN:`;
+    for (const p of priorities) {
+      s += `\n   ${p.rank}. ${p.text}`;
+    }
+  }
+
+  return s;
+}
+
+// ──────────────────────────────────────────────
+// Internal helpers for smart formatters
+// ──────────────────────────────────────────────
+
+/**
+ * Compute when a vehicle will hit a threshold.
+ * @returns {string} "HH:mm" in local tz
+ */
+function computeThresholdTime(timeInStr, thresholdHours, tz) {
+  const fmt = 'dd/MM/yyyy HH:mm:ss';
+  const timeIn = DateTime.fromFormat(timeInStr, fmt, { zone: tz });
+  if (!timeIn.isValid) return '??:??';
+  const thresholdTime = timeIn.plus({ hours: thresholdHours });
+  return thresholdTime.toFormat('HH:mm');
+}
+
+/**
+ * Extract hour (0-23) from formatted datetime string.
+ */
+function extractHour(dateStr) {
+  if (!dateStr) return 12;
+  const match = dateStr.match(/(\d{2}):\d{2}:\d{2}$/);
+  return match ? parseInt(match[1], 10) : 12;
+}
+
 module.exports = {
   generateVehicleId,
   generateEventId,
@@ -243,4 +557,14 @@ module.exports = {
   splitIntoMessages,
   extractTime,
   extractDateTimeShort,
+  // Smart report formatters
+  formatKPIDashboard,
+  formatActionRequired,
+  formatPredictiveAlerts,
+  formatTodayEntries,
+  formatCompletedSection,
+  formatSpecialAttention,
+  formatChecklist,
+  formatMorningBriefing,
+  computeThresholdTime,
 };

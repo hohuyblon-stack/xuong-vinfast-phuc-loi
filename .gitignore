@@ -4,3 +4,5 @@ node_modules/
 .DS_Store
 coverage/
 dist/
+db_check_script.js
+scripts/ocr-check.js

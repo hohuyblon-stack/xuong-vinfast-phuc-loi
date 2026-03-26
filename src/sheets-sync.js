@@ -27,12 +27,25 @@ function syncVehicleIn(row) {
 function syncVehicleOut(plate, vehicleId, updates) {
   fire(async () => {
     const existing = await sheets.findMainRow(plate, 'Đang trong xưởng');
-    if (existing) {
-      await sheets.updateMainRow(existing.rowIndex, updates);
-    } else {
+    if (!existing) {
       logger.warn('Sheets sync: row not found for RA', { plate, vehicleId });
+      return;
     }
-  }, `updateMainRow:${vehicleId}`);
+
+    // 1. Update row with exit data
+    await sheets.updateMainRow(existing.rowIndex, updates);
+
+    // 2. Read updated row data for archive
+    const updatedRow = { ...existing.data, ...updates };
+
+    // 3. Archive to "ĐÃ HOÀN THÀNH"
+    await sheets.archiveCompletedVehicle(updatedRow);
+
+    // 4. Delete from "DANH SÁCH CHÍNH"
+    await sheets.deleteMainRow(existing.rowIndex);
+
+    logger.info('Vehicle archived and removed from main', { plate, vehicleId });
+  }, `archiveVehicle:${vehicleId}`);
 }
 
 function syncLogInsert(row) {
@@ -56,8 +69,11 @@ function syncVehiclePriority(plate, priority, updatedAt) {
   }, `updatePriority:${plate}`);
 }
 
-function syncDailyReport(tabName, rows) {
-  fire(() => sheets.writeDailyReportTab(tabName, rows), `dailyReport:${tabName}`);
+function syncDailyReport(tabName, rows, sectionRowIndices, summaryRowIndex) {
+  fire(
+    () => sheets.writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex),
+    `dailyReport:${tabName}`,
+  );
 }
 
 module.exports = {

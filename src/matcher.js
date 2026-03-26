@@ -4,6 +4,7 @@ const { DateTime } = require('luxon');
 const db         = require('./db');
 const sheetsSync = require('./sheets-sync');
 const utils      = require('./utils');
+const intel      = require('./report-intelligence');
 const logger     = require('./logger');
 
 /**
@@ -22,9 +23,10 @@ async function processVehicleEvent(event, config) {
   const vehicleId = utils.generateVehicleId(tz);
 
   const { messageId, senderId, senderName, imageUrl, ocrResult } = event;
-  const plate      = ocrResult.plateText;
-  const confidence = ocrResult.confidence;
-  const confLabel  = utils.confidenceLabel(confidence, config.ocr);
+  const plate        = ocrResult.plateText;
+  const confidence   = ocrResult.confidence;
+  const vehicleModel = ocrResult.vehicleModel || '';
+  const confLabel    = utils.confidenceLabel(confidence, config.ocr);
   const messageKey = `[MSG_ID:${messageId}]`;
 
   // ── Step 1: Always record in NHẬT KÝ first ──────────────────────────────
@@ -117,7 +119,7 @@ async function processVehicleEvent(event, config) {
   const minWorkshopSecs = config.alerts.minWorkshopMinutes * 60;
   let decision;
   try {
-    decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs);
+    decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs, vehicleModel);
   } catch (err) {
     logger.error('processVehicleDecision RPC failed', { eventId, plate, error: err.message });
 
@@ -148,6 +150,7 @@ async function processVehicleEvent(event, config) {
     sheetsSync.syncVehicleIn({
       vehicleId: decision.vehicle_id,
       plate,
+      vehicleModel,
       timeIn:    now,
       timeOut:   '',
       duration:  '',
@@ -160,9 +163,12 @@ async function processVehicleEvent(event, config) {
     });
 
     logger.info('Vehicle IN processed', { vehicleId: decision.vehicle_id, plate });
+    let replyMsg = `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}`;
+    if (vehicleModel) replyMsg += `\nLoại xe: ${vehicleModel}`;
+    replyMsg += `\nLúc: ${now}\nMã lượt: ${decision.vehicle_id}`;
     return {
       success: true,
-      replyMessage: `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}\nLúc: ${now}\nMã lượt: ${decision.vehicle_id}`,
+      replyMessage: replyMsg,
       eventId,
     };
   }
@@ -201,9 +207,12 @@ async function processVehicleEvent(event, config) {
   });
 
   logger.info('Vehicle OUT processed', { vehicleId: decision.vehicle_id, plate, duration });
+  let replyMsgOut = `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}`;
+  if (vehicleModel) replyMsgOut += `\nLoại xe: ${vehicleModel}`;
+  replyMsgOut += `\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${decision.vehicle_id}`;
   return {
     success: true,
-    replyMessage: `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${decision.vehicle_id}`,
+    replyMessage: replyMsgOut,
     eventId,
   };
 }
@@ -490,153 +499,251 @@ async function sendScheduledProductivityReport(config) {
 // ──────────────────────────────────────────────
 
 async function handleFullReport(config) {
-  const tz   = config.timezone;
-  const data = await db.getFullDailyReport(tz);
+  const tz = config.timezone;
+  const alertThresholds = config.alerts;
+  const intConfig = config.intelligence || {};
+  const maxCapacity = intConfig.workshopCapacity || 130;
+
+  // Fetch ALL data in parallel
+  const [data, weeklyAvg, workshopVehicles, repeatData, durationStats, pendingReviews] =
+    await Promise.all([
+      db.getFullDailyReport(tz),
+      db.getWeeklyAverages(tz, intConfig.weeklyAvgDays || 7),
+      db.getInWorkshopWithHours(tz),
+      db.getRepeatVisitors(tz, intConfig.repeatVisitorDays || 14),
+      db.getDurationStats(tz, intConfig.durationStatsDays || 30),
+      db.getPendingReviews(),
+    ]);
+
+  // Compute intelligence
+  const capacityForecast = intel.computeCapacityForecast(
+    data.inWorkshopCount, weeklyAvg.avgDailyIn, maxCapacity,
+  );
+
+  const urgentVehicles = workshopVehicles.filter(v => v.hoursIn >= alertThresholds.urgentHours);
+  const warningVehicles = workshopVehicles.filter(v =>
+    v.hoursIn >= alertThresholds.warningHours && v.hoursIn < alertThresholds.urgentHours,
+  );
+
+  const predictions = intel.computePredictiveAlerts(
+    workshopVehicles, alertThresholds, intConfig.predictiveBufferHours || 12,
+  );
+
+  const repeats = intel.detectRepeatVisitors(repeatData);
+  const anomalies = intel.detectAnomalies(
+    workshopVehicles, durationStats.p90 > 0 ? durationStats.p90 / 60 : 0,
+  );
+
+  // Build 7 sections
   const parts = [];
 
-  // ── Header + Tổng quan (tồn kho nổi bật) ──
-  const avgStr = data.avgDuration > 0 ? utils.formatDuration(data.avgDuration) : 'N/A';
-  let header = `📊 BÁO CÁO TỔNG HỢP — ${data.today}`;
-  header += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-  header += `\n\n🔧 TỒN KHO: ${data.inWorkshopCount} xe đang trong xưởng`;
-  header += `\n📥 Vào hôm nay: ${data.totalIn} xe`;
-  header += `\n✅ Ra hôm nay: ${data.totalOut} xe`;
-  header += `\n⏱ TB hoàn thành: ${avgStr}`;
-  if (data.warningCount > 0) header += `\n⚠️ Cảnh báo >24h: ${data.warningCount}`;
-  if (data.urgentCount > 0) header += `\n🚨 Khẩn >48h: ${data.urgentCount}`;
-  if (data.pendingReview > 0) header += `\n📋 Cần kiểm tra: ${data.pendingReview} mục`;
-  parts.push(header);
+  // [1] KPI Dashboard
+  parts.push(utils.formatKPIDashboard({ data, weeklyAvg, capacityForecast }));
 
-  // ── Năng suất ──
-  let prod = `📈 NĂNG SUẤT`;
-  const diffIn  = data.totalIn  - data.yesterdayIn;
-  const diffOut = data.totalOut - data.yesterdayOut;
-  const arrowIn  = diffIn > 0 ? `+${diffIn}↑` : diffIn < 0 ? `${diffIn}↓` : '=';
-  const arrowOut = diffOut > 0 ? `+${diffOut}↑` : diffOut < 0 ? `${diffOut}↓` : '=';
-  prod += `\n  So hôm qua (${data.yesterday}): Vào ${data.yesterdayIn}→${data.totalIn} (${arrowIn}) | Ra ${data.yesterdayOut}→${data.totalOut} (${arrowOut})`;
-  prod += `\n  Tỷ lệ hoàn thành: ${data.completionRate}%`;
-  if (data.fastestVehicle) prod += `\n  Nhanh nhất: ${data.fastestVehicle.plate} (${utils.formatDuration(data.fastestVehicle.durationMinutes)})`;
-  if (data.slowestVehicle) prod += `\n  Chậm nhất: ${data.slowestVehicle.plate} (${utils.formatDuration(data.slowestVehicle.durationMinutes)})`;
-  if (data.totalIn > 0) {
-    prod += `\n  Phân bố: Sáng ${data.timeSlots.sang} | Chiều ${data.timeSlots.chieu} | Tối ${data.timeSlots.toi}`;
-    if (data.timeSlots.dem > 0) prod += ` | Đêm ${data.timeSlots.dem}`;
-  }
-  parts.push(prod);
+  // [2] Action Required
+  const actionSection = utils.formatActionRequired(urgentVehicles, warningVehicles, tz);
+  if (actionSection) parts.push(actionSection);
 
-  // ══════════════════════════════════════════════
-  // THỨ TỰ: Tồn kho (chưa ra) → Vào hôm nay → Xe đã ra
-  // Ưu tiên xe CHƯA RA lên trên, xe ĐÃ RA đẩy xuống
-  // ══════════════════════════════════════════════
+  // [3] Predictive Alerts
+  const predictSection = utils.formatPredictiveAlerts(predictions, tz);
+  if (predictSection) parts.push(predictSection);
 
-  let stt = 1;
+  // [4] Today's entries (exception-based)
+  const todaySection = utils.formatTodayEntries(data.vehiclesInToday, data.vehiclesOut, durationStats, tz);
+  if (todaySection) parts.push(todaySection);
 
-  // ── 1. Tồn kho — xe từ trước, đang trong xưởng (ưu tiên cao nhất) ──
-  const oldStock = data.inWorkshop.filter(v =>
-    !data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId)
-  );
-  if (oldStock.length > 0) {
-    const urgent  = [];
-    const warning = [];
-    const normal  = [];
+  // [5] Completed vehicles with buckets
+  const completedSection = utils.formatCompletedSection(data.vehiclesOut, durationStats, weeklyAvg, tz);
+  if (completedSection) parts.push(completedSection);
 
-    for (const v of oldStock) {
-      const line = { stt: stt++, text: utils.formatVehicleInProgress(v, tz) };
-      if (v.priority === 'Khẩn')         urgent.push(line);
-      else if (v.priority === 'Cảnh báo') warning.push(line);
-      else                                normal.push(line);
-    }
+  // [6] Special attention
+  const specialSection = utils.formatSpecialAttention(repeats, anomalies, tz);
+  if (specialSection) parts.push(specialSection);
 
-    let section = `🔧 TỒN KHO TỪ TRƯỚC (${oldStock.length} xe):`;
-    if (urgent.length > 0) {
-      section += `\n  Khẩn >48h (${urgent.length}):`;
-      for (const v of urgent) section += `\n    ${v.stt}. ${v.text}`;
-    }
-    if (warning.length > 0) {
-      section += `\n  Cảnh báo >24h (${warning.length}):`;
-      for (const v of warning) section += `\n    ${v.stt}. ${v.text}`;
-    }
-    if (normal.length > 0) {
-      section += `\n  Bình thường (${normal.length}):`;
-      for (const v of normal) section += `\n    ${v.stt}. ${v.text}`;
-    }
-    parts.push(section);
-  }
-
-  // ── 2. Xe vào hôm nay, chưa ra ──
-  if (data.vehiclesInToday.length > 0) {
-    let section = `📥 VÀO HÔM NAY, CHƯA RA (${data.vehiclesInToday.length}):`;
-    for (const v of data.vehiclesInToday) {
-      section += `\n  ${stt++}. ${utils.formatVehicleInProgress(v, tz)}`;
-    }
-    parts.push(section);
-  }
-
-  // ── 3. Xe đã ra hôm nay (ưu tiên thấp nhất) ──
-  if (data.vehiclesOut.length > 0) {
-    let section = `✅ XE ĐÃ RA HÔM NAY (${data.vehiclesOut.length}):`;
-    for (const v of data.vehiclesOut) {
-      section += `\n  ${stt++}. ${utils.formatVehicleCompleted(v, tz)}`;
-    }
-    parts.push(section);
-  }
+  // [7] Checklist
+  const checklistItems = intel.generateChecklist({
+    inWorkshopCount: data.inWorkshopCount,
+    capacityForecast,
+    urgentCount: urgentVehicles.length,
+    warningCount: warningVehicles.length,
+    predictive24hCount: predictions.approaching24h.length,
+    pendingReviewCount: pendingReviews.count,
+    slowTodayCount: data.vehiclesInToday.filter(v => {
+      const hours = utils.hoursSince(v.timeIn, tz);
+      return hours > (durationStats.p90 > 0 ? durationStats.p90 / 60 : 8);
+    }).length,
+  });
+  parts.push(utils.formatChecklist(checklistItems));
 
   const replyMessages = utils.splitIntoMessages(parts);
 
-  // Fire-and-forget: sync to Google Sheets (mỗi ngày 1 tab)
+  // Fire-and-forget: sync to Google Sheets
   syncDailyReportToSheets(data, tz);
 
   return { replyMessages };
 }
 
+// ──────────────────────────────────────────────
+// MORNING BRIEFING (7:00 AM)
+// ──────────────────────────────────────────────
+
+async function handleMorningBriefing(config) {
+  const tz = config.timezone;
+  const alertThresholds = config.alerts;
+  const intConfig = config.intelligence || {};
+  const maxCapacity = intConfig.workshopCapacity || 130;
+
+  const [workshopVehicles, weeklyAvg] = await Promise.all([
+    db.getInWorkshopWithHours(tz),
+    db.getWeeklyAverages(tz, intConfig.weeklyAvgDays || 7),
+  ]);
+
+  const now = DateTime.now().setZone(tz);
+  const urgentVehicles = workshopVehicles.filter(v => v.hoursIn >= alertThresholds.urgentHours);
+  const warningVehicles = workshopVehicles.filter(v =>
+    v.hoursIn >= alertThresholds.warningHours && v.hoursIn < alertThresholds.urgentHours,
+  );
+  const normalCount = workshopVehicles.length - urgentVehicles.length - warningVehicles.length;
+
+  const capacityForecast = intel.computeCapacityForecast(
+    workshopVehicles.length, weeklyAvg.avgDailyIn, maxCapacity,
+  );
+
+  const predictions = intel.computePredictiveAlerts(
+    workshopVehicles, alertThresholds, intConfig.predictiveBufferHours || 12,
+  );
+
+  const priorities = intel.computeMorningPriorities({
+    urgentVehicles,
+    approaching48h: predictions.approaching48h,
+    capacityForecast,
+  });
+
+  const msg = utils.formatMorningBriefing({
+    today: now.toFormat('dd/MM/yyyy HH:mm'),
+    inWorkshopCount: workshopVehicles.length,
+    urgentCount: urgentVehicles.length,
+    warningCount: warningVehicles.length,
+    normalCount,
+    capacityForecast,
+    approaching24h: predictions.approaching24h,
+    approaching48h: predictions.approaching48h,
+    priorities,
+  });
+
+  return { replyMessages: [msg] };
+}
+
+async function sendScheduledMorningBriefing(config) {
+  try {
+    const report = await handleMorningBriefing(config);
+    for (const msg of report.replyMessages) {
+      await notifyManagers(msg, config);
+    }
+    logger.info('Morning briefing sent');
+  } catch (err) {
+    logger.error('Morning briefing failed', { error: err.message });
+  }
+}
+
 function syncDailyReportToSheets(data, tz) {
-  // Tab name: "BC dd-MM-yyyy"
   const tabName = `BC ${data.today.replace(/\//g, '-')}`;
   const sheetRows = [];
+  const sectionRowIndices = []; // 1-based row indices of section headers
   let stt = 1;
 
-  // 1. Tồn kho từ trước (lên trên)
+  // Helper: format duration minutes to "Xh Yp"
+  const fmtDur = (mins) => {
+    if (mins == null) return '';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${h}h ${m}p`;
+  };
+
+  // Helper: generate note for vehicle
+  const genNote = (v) => {
+    const hours = utils.hoursSince(v.timeIn, tz);
+    if (hours >= 48) return '>48h cần XL';
+    if (hours >= 24) return '>24h theo dõi';
+    return '';
+  };
+
+  // 1. Section: TỒN KHO TỪ TRƯỚC
   const oldStock = data.inWorkshop.filter(v =>
     !data.vehiclesInToday.some(vi => vi.vehicleId === v.vehicleId)
   );
-  for (const v of oldStock) {
+  if (oldStock.length > 0) {
+    sectionRowIndices.push(sheetRows.length + 1); // +1 for header row offset
     sheetRows.push({
-      stt: String(stt++), plate: v.plate,
-      timeIn: v.timeIn, timeOut: '',
-      duration: '', priority: v.priority, status: 'Đang trong xưởng',
-      type: 'TỒN KHO',
+      stt: '', type: `TỒN KHO TỪ TRƯỚC (${oldStock.length} xe)`,
+      plate: '', vehicleModel: '', timeIn: '', timeOut: '', duration: '',
+      priority: '', status: '', note: '',
     });
+    for (const v of oldStock) {
+      const hours = utils.hoursSince(v.timeIn, tz);
+      sheetRows.push({
+        stt: String(stt++), type: 'TỒN KHO',
+        plate: v.plate, vehicleModel: v.vehicleModel || '', timeIn: v.timeIn, timeOut: '',
+        duration: utils.formatHours(hours),
+        priority: v.priority, status: 'Đang trong xưởng',
+        note: genNote(v),
+      });
+    }
   }
 
-  // 2. Vào hôm nay, chưa ra
-  for (const v of data.vehiclesInToday) {
+  // 2. Section: VÀO HÔM NAY
+  if (data.vehiclesInToday.length > 0) {
+    sectionRowIndices.push(sheetRows.length + 1);
     sheetRows.push({
-      stt: String(stt++), plate: v.plate,
-      timeIn: v.timeIn, timeOut: '',
-      duration: '', priority: v.priority, status: 'Đang trong xưởng',
-      type: 'VÀO HÔM NAY',
+      stt: '', type: `VÀO HÔM NAY (${data.vehiclesInToday.length} xe)`,
+      plate: '', vehicleModel: '', timeIn: '', timeOut: '', duration: '',
+      priority: '', status: '', note: '',
     });
+    for (const v of data.vehiclesInToday) {
+      const hours = utils.hoursSince(v.timeIn, tz);
+      sheetRows.push({
+        stt: String(stt++), type: 'VÀO HÔM NAY',
+        plate: v.plate, vehicleModel: v.vehicleModel || '', timeIn: v.timeIn, timeOut: '',
+        duration: utils.formatHours(hours),
+        priority: v.priority, status: 'Đang trong xưởng',
+        note: genNote(v),
+      });
+    }
   }
 
-  // 3. Xe đã ra (xuống dưới)
-  for (const v of data.vehiclesOut) {
+  // 3. Section: ĐÃ RA HÔM NAY
+  if (data.vehiclesOut.length > 0) {
+    sectionRowIndices.push(sheetRows.length + 1);
     sheetRows.push({
-      stt: String(stt++), plate: v.plate,
-      timeIn: v.timeIn, timeOut: v.timeOut,
-      duration: v.durationMinutes != null ? String(v.durationMinutes) : '',
-      priority: v.priority, status: 'Đã ra xưởng',
-      type: 'ĐÃ RA',
+      stt: '', type: `ĐÃ RA HÔM NAY (${data.vehiclesOut.length} xe)`,
+      plate: '', vehicleModel: '', timeIn: '', timeOut: '', duration: '',
+      priority: '', status: '', note: '',
     });
+    for (const v of data.vehiclesOut) {
+      sheetRows.push({
+        stt: String(stt++), type: 'ĐÃ RA',
+        plate: v.plate, vehicleModel: v.vehicleModel || '', timeIn: v.timeIn, timeOut: v.timeOut,
+        duration: v.durationMinutes != null ? fmtDur(v.durationMinutes) : '',
+        priority: v.priority, status: 'Đã ra xưởng',
+        note: '',
+      });
+    }
   }
 
-  // Dòng tổng kết
+  // 4. Summary row
+  const summaryRowIndex = sheetRows.length + 1; // +1 for header
+  const avgStr = data.avgDuration > 0 ? fmtDur(data.avgDuration) : '';
   sheetRows.push({
-    stt: '', plate: `TỒN KHO: ${data.inWorkshopCount} xe`,
-    timeIn: `Vào: ${data.totalIn}`, timeOut: `Ra: ${data.totalOut}`,
-    duration: data.avgDuration > 0 ? `TB: ${data.avgDuration}p` : '',
-    priority: '', status: '', type: 'TỔNG KẾT',
+    stt: '', type: 'TỔNG KẾT',
+    plate: `Tồn: ${data.inWorkshopCount} xe`,
+    timeIn: `Vào: ${data.totalIn}`,
+    timeOut: `Ra: ${data.totalOut}`,
+    duration: avgStr ? `TB: ${avgStr}` : '',
+    priority: '', status: `Hoàn thành: ${data.completionRate}%`,
+    note: '',
   });
 
-  sheetsSync.syncDailyReport(tabName, sheetRows);
+  sheetsSync.syncDailyReport(tabName, sheetRows, sectionRowIndices, summaryRowIndex);
 }
 
 async function sendScheduledFullReport(config) {
@@ -762,6 +869,8 @@ module.exports = {
   handleAccountingReport,
   handleFullReport,
   sendScheduledFullReport,
+  handleMorningBriefing,
+  sendScheduledMorningBriefing,
   handleManualExit,
   sendEndOfDayReminder,
 };

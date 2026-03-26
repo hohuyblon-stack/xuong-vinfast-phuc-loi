@@ -48,13 +48,14 @@ async function testConnection() {
  *
  * @returns {{ action: 'VAO'|'RA'|'RA_DUPLICATE', vehicle_id: string, time_in_ts: string, seconds_in: number }}
  */
-async function processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs = 900) {
+async function processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs = 900, vehicleModel = '') {
   const { data, error } = await supabase.rpc('process_vehicle', {
     p_plate:              plate,
     p_vehicle_id:         vehicleId,
     p_now_ts:             nowIso,
     p_image_url:          imageUrl,
     p_min_workshop_secs:  minWorkshopSecs,
+    p_vehicle_model:      vehicleModel,
   });
 
   if (error) throw new Error(`process_vehicle RPC failed: ${error.message}`);
@@ -147,7 +148,7 @@ async function getAllInWorkshop(tz) {
   const zone = tz || appTimezone;
   const { data, error } = await supabase
     .from('vehicles')
-    .select('vehicle_id, plate, time_in, priority, note')
+    .select('vehicle_id, plate, time_in, priority, note, vehicle_model')
     .eq('status', 'Đang trong xưởng')
     .order('time_in', { ascending: true });
 
@@ -158,6 +159,7 @@ async function getAllInWorkshop(tz) {
     timeIn:    fmtTs(v.time_in, zone),
     priority:  v.priority,
     note:      v.note || '',
+    vehicleModel: v.vehicle_model || '',
   }));
 }
 
@@ -345,11 +347,11 @@ async function getProductivityData(tz) {
   const [recentRes, workshopRes, reviewRes] = await Promise.all([
     supabase
       .from('vehicles')
-      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, vehicle_model')
       .gte('time_in', since),
     supabase
       .from('vehicles')
-      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, vehicle_model')
       .eq('status', 'Đang trong xưởng'),
     supabase
       .from('reviews')
@@ -437,7 +439,7 @@ async function getAllMainRows(tz) {
   const zone = tz || appTimezone;
   const { data, error } = await supabase
     .from('vehicles')
-    .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, note')
+    .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, note, vehicle_model')
     .order('time_in', { ascending: true });
 
   if (error) throw new Error(`getAllMainRows failed: ${error.message}`);
@@ -450,6 +452,7 @@ async function getAllMainRows(tz) {
     status:    v.status,
     priority:  v.priority,
     note:      v.note || '',
+    vehicleModel: v.vehicle_model || '',
   }));
 }
 
@@ -466,11 +469,11 @@ async function getFullDailyReport(tz) {
   const [recentRes, workshopRes, reviewRes] = await Promise.all([
     supabase
       .from('vehicles')
-      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, vehicle_model')
       .gte('time_in', since),
     supabase
       .from('vehicles')
-      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority')
+      .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, vehicle_model')
       .eq('status', 'Đang trong xưởng'),
     supabase
       .from('reviews')
@@ -509,6 +512,7 @@ async function getFullDailyReport(tz) {
       durationMinutes: dur,
       priority:  v.priority,
       status:    v.status,
+      vehicleModel: v.vehicle_model || '',
     };
 
     // Today's entries
@@ -587,6 +591,178 @@ async function getFullDailyReport(tz) {
 }
 
 // ──────────────────────────────────────────────
+// Intelligence queries (smart report)
+// ──────────────────────────────────────────────
+
+/**
+ * Get weekly averages for the last N days.
+ * @returns {{ avgDailyIn: number, avgDailyOut: number, avgDuration: number }}
+ */
+async function getWeeklyAverages(tz, days = 7) {
+  const zone = tz || appTimezone;
+  const since = DateTime.now().setZone(zone).minus({ days }).startOf('day').toISO();
+
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('time_in, time_out, duration_minutes, status')
+    .gte('time_in', since);
+
+  if (error) {
+    logger.error('getWeeklyAverages failed', { error: error.message });
+    return { avgDailyIn: 0, avgDailyOut: 0, avgDuration: 0 };
+  }
+
+  const rows = data || [];
+  const now = DateTime.now().setZone(zone);
+  const dailyIn = new Map();
+  const dailyOut = new Map();
+  let totalDuration = 0;
+  let completedCount = 0;
+
+  for (const r of rows) {
+    if (r.time_in) {
+      const d = DateTime.fromISO(r.time_in, { zone }).toISODate();
+      dailyIn.set(d, (dailyIn.get(d) || 0) + 1);
+    }
+    if (r.time_out) {
+      const d = DateTime.fromISO(r.time_out, { zone }).toISODate();
+      dailyOut.set(d, (dailyOut.get(d) || 0) + 1);
+    }
+    if (r.duration_minutes != null && r.time_out) {
+      totalDuration += r.duration_minutes;
+      completedCount++;
+    }
+  }
+
+  const numDays = Math.max(dailyIn.size, 1);
+  const totalIn = [...dailyIn.values()].reduce((a, b) => a + b, 0);
+  const totalOut = [...dailyOut.values()].reduce((a, b) => a + b, 0);
+
+  return {
+    avgDailyIn: Math.round(totalIn / numDays),
+    avgDailyOut: Math.round(totalOut / numDays),
+    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
+  };
+}
+
+/**
+ * Get vehicles approaching 24h/48h thresholds (for predictive alerts).
+ * Returns in-workshop vehicles with computed hoursIn.
+ */
+async function getInWorkshopWithHours(tz) {
+  const zone = tz || appTimezone;
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('vehicle_id, plate, time_in, priority, status, vehicle_model')
+    .eq('status', 'Đang trong xưởng');
+
+  if (error) {
+    logger.error('getInWorkshopWithHours failed', { error: error.message });
+    return [];
+  }
+
+  const now = DateTime.now().setZone(zone);
+  return (data || []).map(v => {
+    const timeIn = v.time_in ? DateTime.fromISO(v.time_in, { zone }) : now;
+    const hoursIn = now.diff(timeIn, 'hours').hours;
+    return {
+      vehicleId: v.vehicle_id,
+      plate: v.plate,
+      timeIn: fmtTs(v.time_in, zone),
+      timeInISO: v.time_in,
+      priority: v.priority,
+      hoursIn: Math.round(hoursIn * 10) / 10,
+      vehicleModel: v.vehicle_model || '',
+    };
+  });
+}
+
+/**
+ * Detect plates that visited multiple times in the last N days.
+ */
+async function getRepeatVisitors(tz, windowDays = 14) {
+  const zone = tz || appTimezone;
+  const since = DateTime.now().setZone(zone).minus({ days: windowDays }).startOf('day').toISO();
+
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('plate, time_in, time_out')
+    .gte('time_in', since)
+    .order('time_in', { ascending: false });
+
+  if (error) {
+    logger.error('getRepeatVisitors failed', { error: error.message });
+    return [];
+  }
+
+  return (data || []).map(v => ({
+    plate: v.plate,
+    timeIn: fmtTs(v.time_in, zone),
+    timeOut: fmtTs(v.time_out, zone),
+  }));
+}
+
+/**
+ * Get duration statistics (percentiles) from completed vehicles.
+ */
+async function getDurationStats(tz, days = 30) {
+  const zone = tz || appTimezone;
+  const since = DateTime.now().setZone(zone).minus({ days }).startOf('day').toISO();
+
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('duration_minutes')
+    .gte('time_in', since)
+    .not('duration_minutes', 'is', null)
+    .not('time_out', 'is', null)
+    .order('duration_minutes', { ascending: true });
+
+  if (error) {
+    logger.error('getDurationStats failed', { error: error.message });
+    return { p50: 0, p75: 0, p90: 0, count: 0 };
+  }
+
+  const durations = (data || []).map(r => r.duration_minutes);
+  if (durations.length === 0) return { p50: 0, p75: 0, p90: 0, count: 0 };
+
+  const p = (arr, pct) => {
+    const idx = Math.ceil((pct / 100) * arr.length) - 1;
+    return arr[Math.max(0, idx)];
+  };
+
+  return {
+    p50: p(durations, 50),
+    p75: p(durations, 75),
+    p90: p(durations, 90),
+    count: durations.length,
+  };
+}
+
+/**
+ * Get pending OCR reviews (detailed).
+ */
+async function getPendingReviews() {
+  const { data, error } = await supabase
+    .from('reviews')
+    .select('error_id, plate_ai, reason, timestamp')
+    .eq('review_status', 'Chưa xử lý')
+    .order('timestamp', { ascending: false })
+    .limit(20);
+
+  if (error) {
+    logger.error('getPendingReviews failed', { error: error.message });
+    return { count: 0, items: [] };
+  }
+
+  const items = (data || []).map(r => ({
+    plate: r.plate_ai,
+    reason: r.reason,
+  }));
+
+  return { count: items.length, items };
+}
+
+// ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
 
@@ -633,4 +809,10 @@ module.exports = {
   expireStaleVehicles,
   forceExitVehicle,
   countInWorkshop,
+  // Intelligence queries (smart report)
+  getWeeklyAverages,
+  getInWorkshopWithHours,
+  getRepeatVisitors,
+  getDurationStats,
+  getPendingReviews,
 };

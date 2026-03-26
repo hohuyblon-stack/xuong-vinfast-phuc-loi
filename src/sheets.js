@@ -13,7 +13,12 @@ let tabNames = {};
 
 const COLUMNS = {
   main: [
-    'Mã lượt xe', 'Biển số', 'Giờ vào', 'Giờ ra',
+    'Mã lượt xe', 'Biển số', 'Loại xe', 'Giờ vào', 'Giờ ra',
+    'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
+    'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
+  ],
+  completed: [
+    'Mã lượt xe', 'Biển số', 'Loại xe', 'Giờ vào', 'Giờ ra',
     'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
     'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
   ],
@@ -27,8 +32,8 @@ const COLUMNS = {
     'Người xử lý', 'Thời điểm xử lý', 'Liên kết lượt xe',
   ],
   dailyReport: [
-    'STT', 'Biển Số', 'Giờ Vào', 'Giờ Ra', 'Lưu (phút)',
-    'Ưu Tiên', 'Trạng Thái', 'Loại',
+    'STT', 'Loại', 'Biển Số', 'Loại xe', 'Giờ Vào', 'Giờ Ra',
+    'Thời gian', 'Ưu Tiên', 'Trạng Thái', 'Ghi chú',
   ],
 };
 
@@ -60,6 +65,7 @@ async function ensureTabs() {
 
   const tabConfigs = [
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
+    { key: 'completed', name: tabNames.completed, columns: COLUMNS.completed },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
     // dailyReport: mỗi ngày tạo tab riêng trong writeDailyReportTab()
@@ -93,6 +99,25 @@ async function ensureTabs() {
         requestBody: { values: [tab.columns] },
       });
       logger.info(`Wrote header for tab "${tab.name}"`);
+
+      // Apply professional formatting to main + completed tabs
+      if (tab.key === 'main' || tab.key === 'completed') {
+        try {
+          const sid = await getSheetIdByName(tab.name);
+          if (sid != null) {
+            const { buildMainSheetFormatting } = require('./sheets-format');
+            const fmtRequests = buildMainSheetFormatting(sid, 2, tab.columns.length);
+            if (fmtRequests.length > 0) {
+              await sheetsApi.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: { requests: fmtRequests },
+              });
+            }
+          }
+        } catch (err) {
+          logger.error('Tab formatting failed (non-blocking)', { tab: tab.name, error: err.message });
+        }
+      }
     }
   }
 }
@@ -108,6 +133,7 @@ async function appendMainRow(row) {
   const values = [[
     row.vehicleId,
     row.plate,
+    row.vehicleModel || '',
     row.timeIn || '',
     row.timeOut || '',
     row.duration || '',
@@ -121,7 +147,7 @@ async function appendMainRow(row) {
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.main}'!A:K`,
+    range: `'${tabNames.main}'!A:L`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
@@ -135,27 +161,28 @@ async function appendMainRow(row) {
  * Tra ve { rowIndex (1-based), data } hoac null.
  */
 async function findMainRow(plate, status) {
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:L`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
   for (let i = rows.length - 1; i >= 1; i--) {
     const row = rows[i];
-    if (row[1] === plate && row[7] === status) {
+    if (row[1] === plate && row[8] === status) {
       return {
         rowIndex: i + 1,
         data: {
           vehicleId: row[0],
           plate: row[1],
-          timeIn: row[2],
-          timeOut: row[3],
-          duration: row[4],
-          imageIn: row[5],
-          imageOut: row[6],
-          status: row[7],
-          priority: row[8],
-          note: row[9],
-          updatedAt: row[10],
+          vehicleModel: row[2],
+          timeIn: row[3],
+          timeOut: row[4],
+          duration: row[5],
+          imageIn: row[6],
+          imageOut: row[7],
+          status: row[8],
+          priority: row[9],
+          note: row[10],
+          updatedAt: row[11],
         },
       };
     }
@@ -167,18 +194,18 @@ async function findMainRow(plate, status) {
  * Cap nhat 1 dong (partial update).
  */
 async function updateMainRow(rowIndex, updates) {
-  const range = `'${tabNames.main}'!A${rowIndex}:K${rowIndex}`;
+  const range = `'${tabNames.main}'!A${rowIndex}:L${rowIndex}`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const current = (res.data.values && res.data.values[0]) || [];
 
   const fieldMap = {
-    vehicleId: 0, plate: 1, timeIn: 2, timeOut: 3,
-    duration: 4, imageIn: 5, imageOut: 6, status: 7,
-    priority: 8, note: 9, updatedAt: 10,
+    vehicleId: 0, plate: 1, vehicleModel: 2, timeIn: 3, timeOut: 4,
+    duration: 5, imageIn: 6, imageOut: 7, status: 8,
+    priority: 9, note: 10, updatedAt: 11,
   };
 
   const updated = [...current];
-  while (updated.length < 11) updated.push('');
+  while (updated.length < 12) updated.push('');
 
   for (const [field, value] of Object.entries(updates)) {
     if (fieldMap[field] !== undefined) {
@@ -200,21 +227,22 @@ async function updateMainRow(rowIndex, updates) {
  * Lay tat ca xe "Dang trong xuong".
  */
 async function getAllInWorkshop() {
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:L`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
   const results = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row[7] === 'Đang trong xưởng') {
+    if (row[8] === 'Đang trong xưởng') {
       results.push({
         rowIndex: i + 1,
         vehicleId: row[0],
         plate: row[1],
-        timeIn: row[2],
-        priority: row[8],
-        note: row[9] || '',
+        vehicleModel: row[2],
+        timeIn: row[3],
+        priority: row[9],
+        note: row[10] || '',
       });
     }
   }
@@ -226,7 +254,7 @@ async function getAllInWorkshop() {
  * Dung cho bao cao ke toan.
  */
 async function getAllMainRows() {
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:L`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
   const results = [];
@@ -238,12 +266,13 @@ async function getAllMainRows() {
       rowIndex: i + 1,
       vehicleId: row[0] || '',
       plate:     row[1] || '',
-      timeIn:    row[2] || '',
-      timeOut:   row[3] || '',
-      duration:  row[4] || '',
-      status:    row[7] || '',
-      priority:  row[8] || '',
-      note:      row[9] || '',
+      vehicleModel: row[2] || '',
+      timeIn:    row[3] || '',
+      timeOut:   row[4] || '',
+      duration:  row[5] || '',
+      status:    row[8] || '',
+      priority:  row[9] || '',
+      note:      row[10] || '',
     });
   }
   return results;
@@ -256,7 +285,7 @@ async function getDailySummary(tz) {
   const { DateTime } = require('luxon');
   const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
 
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:L`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -270,11 +299,11 @@ async function getDailySummary(tz) {
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    const timeIn = row[2] || '';
-    const timeOut = row[3] || '';
-    const duration = parseInt(row[4], 10);
-    const status = row[7] || '';
-    const priority = row[8] || '';
+    const timeIn = row[3] || '';
+    const timeOut = row[4] || '';
+    const duration = parseInt(row[5], 10);
+    const status = row[8] || '';
+    const priority = row[9] || '';
 
     if (timeIn.startsWith(today)) totalIn++;
     if (timeOut.startsWith(today)) totalOut++;
@@ -318,7 +347,7 @@ async function getProductivityData(tz) {
   const today = now.toFormat('dd/MM/yyyy');
   const yesterday = now.minus({ days: 1 }).toFormat('dd/MM/yyyy');
 
-  const range = `'${tabNames.main}'!A:K`;
+  const range = `'${tabNames.main}'!A:L`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -342,11 +371,11 @@ async function getProductivityData(tz) {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const plate = row[1] || '';
-    const timeIn = row[2] || '';
-    const timeOut = row[3] || '';
-    const duration = parseInt(row[4], 10);
-    const status = row[7] || '';
-    const priority = row[8] || '';
+    const timeIn = row[3] || '';
+    const timeOut = row[4] || '';
+    const duration = parseInt(row[5], 10);
+    const status = row[8] || '';
+    const priority = row[9] || '';
 
     if (timeIn.startsWith(today)) {
       todayIn++;
@@ -500,34 +529,38 @@ async function appendReviewRow(row) {
  * Tạo tab mới cho ngày báo cáo (VD: "BC 20-03-2026"), ghi header + data.
  * Nếu tab đã tồn tại thì bỏ qua (idempotent).
  */
-async function writeDailyReportTab(tabName, rows) {
+async function writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex) {
   // Tạo tab mới nếu chưa có
   const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
   const existing = spreadsheet.data.sheets.map(s => s.properties.title);
 
+  let newSheetId = null;
   if (!existing.includes(tabName)) {
-    await sheetsApi.spreadsheets.batchUpdate({
+    const addRes = await sheetsApi.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
         requests: [{ addSheet: { properties: { title: tabName } } }],
       },
     });
+    newSheetId = addRes.data.replies[0].addSheet.properties.sheetId;
     logger.info(`Created daily report tab: "${tabName}"`);
   }
 
-  // Ghi header + data
+  // Ghi header + data (10 cột mới)
   const header = COLUMNS.dailyReport;
   const values = [
     header,
     ...rows.map(r => [
       r.stt || '',
+      r.type || '',
       r.plate || '',
+      r.vehicleModel || '',
       r.timeIn || '',
       r.timeOut || '',
       r.duration || '',
       r.priority || '',
       r.status || '',
-      r.type || '',
+      r.note || '',
     ]),
   ];
 
@@ -538,6 +571,30 @@ async function writeDailyReportTab(tabName, rows) {
     valueInputOption: 'RAW',
     requestBody: { values },
   });
+
+  // Apply formatting
+  try {
+    const sheetId = newSheetId != null ? newSheetId : await getSheetIdByName(tabName);
+    if (sheetId != null) {
+      const { buildDailyReportFormatting } = require('./sheets-format');
+      const formatRequests = buildDailyReportFormatting(
+        sheetId,
+        values.length,
+        header.length,
+        sectionRowIndices || [],
+        summaryRowIndex != null ? summaryRowIndex : values.length - 1,
+      );
+
+      if (formatRequests.length > 0) {
+        await sheetsApi.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: { requests: formatRequests },
+        });
+      }
+    }
+  } catch (err) {
+    logger.error('Daily report formatting failed (non-blocking)', { error: err.message });
+  }
 
   logger.info('Wrote daily report tab', { tabName, rows: rows.length });
 }
@@ -558,6 +615,78 @@ async function isMessageProcessed(messageId) {
     }
   }
   return false;
+}
+
+// ──────────────────────────────────────────────
+// Archive (xe đã ra → ĐÃ HOÀN THÀNH)
+// ──────────────────────────────────────────────
+
+/**
+ * Append a completed vehicle row to the "ĐÃ HOÀN THÀNH" tab.
+ */
+async function archiveCompletedVehicle(rowData) {
+  const values = [[
+    rowData.vehicleId || '',
+    rowData.plate || '',
+    rowData.vehicleModel || '',
+    rowData.timeIn || '',
+    rowData.timeOut || '',
+    rowData.duration || '',
+    rowData.imageIn || '',
+    rowData.imageOut || '',
+    rowData.status || 'Đã ra xưởng',
+    rowData.priority || '',
+    rowData.note || '',
+    rowData.updatedAt || '',
+  ]];
+
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${tabNames.completed}'!A:L`,
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values },
+  });
+
+  logger.info('Archived completed vehicle', { plate: rowData.plate });
+}
+
+/**
+ * Delete a row from "DANH SÁCH CHÍNH" by row index (1-based).
+ */
+async function deleteMainRow(rowIndex) {
+  const sheetId = await getSheetIdByName(tabNames.main);
+  if (sheetId == null) {
+    logger.error('deleteMainRow: could not find main sheet ID');
+    return;
+  }
+
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId,
+            dimension: 'ROWS',
+            startIndex: rowIndex - 1, // 0-based
+            endIndex: rowIndex,       // exclusive
+          },
+        },
+      }],
+    },
+  });
+
+  logger.info('Deleted main row', { rowIndex });
+}
+
+/**
+ * Get the sheetId (numeric) for a tab by name.
+ */
+async function getSheetIdByName(name) {
+  const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets.find(s => s.properties.title === name);
+  return sheet ? sheet.properties.sheetId : null;
 }
 
 // ──────────────────────────────────────────────
@@ -584,4 +713,7 @@ module.exports = {
   updateLogResult,
   appendReviewRow,
   writeDailyReportTab,
+  archiveCompletedVehicle,
+  deleteMainRow,
+  getSheetIdByName,
 };

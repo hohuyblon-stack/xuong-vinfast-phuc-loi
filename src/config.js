@@ -39,6 +39,7 @@ function loadConfig() {
       credentials: JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
       tabNames: {
         main: optionalEnv('SHEET_TAB_MAIN', 'DANH SÁCH CHÍNH'),
+        completed: optionalEnv('SHEET_TAB_COMPLETED', 'ĐÃ HOÀN THÀNH'),
         log: optionalEnv('SHEET_TAB_LOG', 'NHẬT KÝ'),
         review: optionalEnv('SHEET_TAB_REVIEW', 'CẦN KIỂM TRA'),
         dailyReport: optionalEnv('SHEET_TAB_DAILY_REPORT', 'BÁO CÁO HÀNG NGÀY'),
@@ -68,6 +69,19 @@ function loadConfig() {
         .map(s => s.trim())
         .filter(Boolean),
       dailyReportHour: parseInt(optionalEnv('DAILY_REPORT_HOUR', '18'), 10),
+      morningReportHour: parseInt(optionalEnv('MORNING_REPORT_HOUR', '7'), 10),
+    },
+
+    // Intelligence thresholds (smart report)
+    intelligence: {
+      workshopCapacity: parseInt(optionalEnv('WORKSHOP_CAPACITY', '130'), 10),
+      durationFastHours: 3,
+      durationNormalHours: 5,
+      durationSlowHours: 8,
+      predictiveBufferHours: 12,
+      repeatVisitorDays: 14,
+      durationStatsDays: 30,
+      weeklyAvgDays: 7,
     },
 
     // Supabase (PostgreSQL — source of truth)
