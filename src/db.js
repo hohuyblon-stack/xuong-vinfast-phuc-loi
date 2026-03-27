@@ -791,9 +791,26 @@ function fmtTs(ts, zone) {
   return DateTime.fromISO(ts, { zone }).toFormat('dd/MM/yyyy HH:mm:ss');
 }
 
+/**
+ * Lookup model xe từ lịch sử — dùng khi OCR không detect được model từ ảnh.
+ * Trả về model của lần vào gần nhất nếu có, ngược lại trả về ''.
+ */
+async function getPlateModel(plate) {
+  const { data } = await supabase
+    .from('vehicles')
+    .select('vehicle_model')
+    .eq('plate', plate)
+    .neq('vehicle_model', '')
+    .order('time_in', { ascending: false })
+    .limit(1)
+    .single();
+  return data?.vehicle_model || '';
+}
+
 module.exports = {
   initDb,
   processVehicleDecision,
+  getPlateModel,
   insertEvent,
   updateEventResult,
   insertReview,

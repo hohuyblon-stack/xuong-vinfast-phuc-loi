@@ -114,12 +114,21 @@ async function processVehicleEvent(event, config) {
     };
   }
 
+  // ── Step 2.5: Plate memory — nếu OCR không detect model, lookup từ lịch sử ─
+  let resolvedModel = vehicleModel;
+  if (!resolvedModel) {
+    resolvedModel = await db.getPlateModel(plate);
+    if (resolvedModel) {
+      logger.info('Model từ lịch sử', { plate, vehicleModel: resolvedModel });
+    }
+  }
+
   // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
 
   const minWorkshopSecs = config.alerts.minWorkshopMinutes * 60;
   let decision;
   try {
-    decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs, vehicleModel);
+    decision = await db.processVehicleDecision(plate, vehicleId, nowIso, imageUrl, minWorkshopSecs, resolvedModel);
   } catch (err) {
     logger.error('processVehicleDecision RPC failed', { eventId, plate, error: err.message });
 
@@ -150,7 +159,7 @@ async function processVehicleEvent(event, config) {
     sheetsSync.syncVehicleIn({
       vehicleId: decision.vehicle_id,
       plate,
-      vehicleModel,
+      vehicleModel: resolvedModel,
       timeIn:    now,
       timeOut:   '',
       duration:  '',
@@ -164,7 +173,7 @@ async function processVehicleEvent(event, config) {
 
     logger.info('Vehicle IN processed', { vehicleId: decision.vehicle_id, plate });
     let replyMsg = `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}`;
-    if (vehicleModel) replyMsg += `\nLoại xe: ${vehicleModel}`;
+    if (resolvedModel) replyMsg += `\nLoại xe: ${resolvedModel}`;
     replyMsg += `\nLúc: ${now}\nMã lượt: ${decision.vehicle_id}`;
     return {
       success: true,
@@ -208,7 +217,7 @@ async function processVehicleEvent(event, config) {
 
   logger.info('Vehicle OUT processed', { vehicleId: decision.vehicle_id, plate, duration });
   let replyMsgOut = `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}`;
-  if (vehicleModel) replyMsgOut += `\nLoại xe: ${vehicleModel}`;
+  if (resolvedModel) replyMsgOut += `\nLoại xe: ${resolvedModel}`;
   replyMsgOut += `\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${decision.vehicle_id}`;
   return {
     success: true,
