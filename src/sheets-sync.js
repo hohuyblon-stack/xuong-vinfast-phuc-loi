@@ -21,7 +21,9 @@ function fire(fn, context) {
 }
 
 function syncVehicleIn(row) {
-  fire(() => sheets.appendMainRow(row), `appendMainRow:${row.vehicleId}`);
+  // Remove vehicleModel before syncing to sheets (DB field remains, just not synced)
+  const { vehicleModel, ...rowWithoutModel } = row;
+  fire(() => sheets.appendMainRow(rowWithoutModel), `appendMainRow:${row.vehicleId}`);
 }
 
 function syncVehicleOut(plate, vehicleId, updates) {

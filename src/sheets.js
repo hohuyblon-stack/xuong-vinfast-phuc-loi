@@ -13,12 +13,12 @@ let tabNames = {};
 
 const COLUMNS = {
   main: [
-    'Mã lượt xe', 'Biển số', 'Loại xe', 'Giờ vào', 'Giờ ra',
+    'Mã lượt xe', 'Biển số', 'Giờ vào', 'Giờ ra',
     'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
     'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
   ],
   completed: [
-    'Mã lượt xe', 'Biển số', 'Loại xe', 'Giờ vào', 'Giờ ra',
+    'Mã lượt xe', 'Biển số', 'Giờ vào', 'Giờ ra',
     'Lưu trong xưởng (phút)', 'Ảnh lúc vào', 'Ảnh lúc ra',
     'Trạng thái', 'Mức ưu tiên', 'Ghi chú', 'Cập nhật lúc',
   ],
@@ -133,7 +133,6 @@ async function appendMainRow(row) {
   const values = [[
     row.vehicleId,
     row.plate,
-    row.vehicleModel || '',
     row.timeIn || '',
     row.timeOut || '',
     row.duration || '',
@@ -147,7 +146,7 @@ async function appendMainRow(row) {
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.main}'!A:L`,
+    range: `'${tabNames.main}'!A:K`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
@@ -161,28 +160,27 @@ async function appendMainRow(row) {
  * Tra ve { rowIndex (1-based), data } hoac null.
  */
 async function findMainRow(plate, status) {
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
   for (let i = rows.length - 1; i >= 1; i--) {
     const row = rows[i];
-    if (row[1] === plate && row[8] === status) {
+    if (row[1] === plate && row[7] === status) {
       return {
         rowIndex: i + 1,
         data: {
           vehicleId: row[0],
           plate: row[1],
-          vehicleModel: row[2],
-          timeIn: row[3],
-          timeOut: row[4],
-          duration: row[5],
-          imageIn: row[6],
-          imageOut: row[7],
-          status: row[8],
-          priority: row[9],
-          note: row[10],
-          updatedAt: row[11],
+          timeIn: row[2],
+          timeOut: row[3],
+          duration: row[4],
+          imageIn: row[5],
+          imageOut: row[6],
+          status: row[7],
+          priority: row[8],
+          note: row[9],
+          updatedAt: row[10],
         },
       };
     }
@@ -194,18 +192,18 @@ async function findMainRow(plate, status) {
  * Cap nhat 1 dong (partial update).
  */
 async function updateMainRow(rowIndex, updates) {
-  const range = `'${tabNames.main}'!A${rowIndex}:L${rowIndex}`;
+  const range = `'${tabNames.main}'!A${rowIndex}:K${rowIndex}`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const current = (res.data.values && res.data.values[0]) || [];
 
   const fieldMap = {
-    vehicleId: 0, plate: 1, vehicleModel: 2, timeIn: 3, timeOut: 4,
-    duration: 5, imageIn: 6, imageOut: 7, status: 8,
-    priority: 9, note: 10, updatedAt: 11,
+    vehicleId: 0, plate: 1, timeIn: 2, timeOut: 3,
+    duration: 4, imageIn: 5, imageOut: 6, status: 7,
+    priority: 8, note: 9, updatedAt: 10,
   };
 
   const updated = [...current];
-  while (updated.length < 12) updated.push('');
+  while (updated.length < 11) updated.push('');
 
   for (const [field, value] of Object.entries(updates)) {
     if (fieldMap[field] !== undefined) {
@@ -227,22 +225,21 @@ async function updateMainRow(rowIndex, updates) {
  * Lay tat ca xe "Dang trong xuong".
  */
 async function getAllInWorkshop() {
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
   const results = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row[8] === 'Đang trong xưởng') {
+    if (row[7] === 'Đang trong xưởng') {
       results.push({
         rowIndex: i + 1,
         vehicleId: row[0],
         plate: row[1],
-        vehicleModel: row[2],
-        timeIn: row[3],
-        priority: row[9],
-        note: row[10] || '',
+        timeIn: row[2],
+        priority: row[8],
+        note: row[9] || '',
       });
     }
   }
@@ -254,7 +251,7 @@ async function getAllInWorkshop() {
  * Dung cho bao cao ke toan.
  */
 async function getAllMainRows() {
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
   const results = [];
@@ -266,13 +263,12 @@ async function getAllMainRows() {
       rowIndex: i + 1,
       vehicleId: row[0] || '',
       plate:     row[1] || '',
-      vehicleModel: row[2] || '',
-      timeIn:    row[3] || '',
-      timeOut:   row[4] || '',
-      duration:  row[5] || '',
-      status:    row[8] || '',
-      priority:  row[9] || '',
-      note:      row[10] || '',
+      timeIn:    row[2] || '',
+      timeOut:   row[3] || '',
+      duration:  row[4] || '',
+      status:    row[7] || '',
+      priority:  row[8] || '',
+      note:      row[9] || '',
     });
   }
   return results;
@@ -285,7 +281,7 @@ async function getDailySummary(tz) {
   const { DateTime } = require('luxon');
   const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
 
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -299,11 +295,11 @@ async function getDailySummary(tz) {
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    const timeIn = row[3] || '';
-    const timeOut = row[4] || '';
-    const duration = parseInt(row[5], 10);
-    const status = row[8] || '';
-    const priority = row[9] || '';
+    const timeIn = row[2] || '';
+    const timeOut = row[3] || '';
+    const duration = parseInt(row[4], 10);
+    const status = row[7] || '';
+    const priority = row[8] || '';
 
     if (timeIn.startsWith(today)) totalIn++;
     if (timeOut.startsWith(today)) totalOut++;
@@ -347,7 +343,7 @@ async function getProductivityData(tz) {
   const today = now.toFormat('dd/MM/yyyy');
   const yesterday = now.minus({ days: 1 }).toFormat('dd/MM/yyyy');
 
-  const range = `'${tabNames.main}'!A:L`;
+  const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
@@ -371,11 +367,11 @@ async function getProductivityData(tz) {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const plate = row[1] || '';
-    const timeIn = row[3] || '';
-    const timeOut = row[4] || '';
-    const duration = parseInt(row[5], 10);
-    const status = row[8] || '';
-    const priority = row[9] || '';
+    const timeIn = row[2] || '';
+    const timeOut = row[3] || '';
+    const duration = parseInt(row[4], 10);
+    const status = row[7] || '';
+    const priority = row[8] || '';
 
     if (timeIn.startsWith(today)) {
       todayIn++;
@@ -628,7 +624,6 @@ async function archiveCompletedVehicle(rowData) {
   const values = [[
     rowData.vehicleId || '',
     rowData.plate || '',
-    rowData.vehicleModel || '',
     rowData.timeIn || '',
     rowData.timeOut || '',
     rowData.duration || '',
@@ -642,7 +637,7 @@ async function archiveCompletedVehicle(rowData) {
 
   await sheetsApi.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${tabNames.completed}'!A:L`,
+    range: `'${tabNames.completed}'!A:K`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
