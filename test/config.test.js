@@ -438,7 +438,7 @@ describe('config sheet tab names', () => {
     const { loadConfig } = require('../src/config');
     const config = loadConfig();
 
-    assert.equal(config.sheets.tabNames.main, 'DANH SÁCH CHÍNH');
+    assert.equal(config.sheets.tabNames.main, 'ĐANG TRONG XƯỞNG');
     assert.equal(config.sheets.tabNames.log, 'NHẬT KÝ');
     assert.equal(config.sheets.tabNames.review, 'CẦN KIỂM TRA');
   });

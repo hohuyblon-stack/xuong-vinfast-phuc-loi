@@ -1,24 +1,25 @@
 'use strict';
 
 /**
- * Tests for sheets-sync.js
+ * Tests for sheets-sync.js (WRITE-ONLY mirror)
  *
  * Core guarantee: ALL functions are fire-and-forget.
  * Errors from Sheets MUST be swallowed and logged — never propagated.
+ * No Sheets READ operations — DB is source of truth.
  */
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-// ── Mocks (injected before requiring the module under test) ──────────────────
+// ── Mocks ──────────────────────────────────────────────────────────────────────
 
 const mockSheets = {
-  appendMainRow:  async () => {},
-  appendLogRow:   async () => {},
-  appendReviewRow: async () => {},
-  updateLogResult: async () => {},
-  findMainRow:    async () => null,
-  updateMainRow:  async () => {},
+  appendMainRow:           async () => {},
+  appendLogRow:            async () => {},
+  appendReviewRow:         async () => {},
+  archiveCompletedVehicle: async () => {},
+  deleteMainRow:           async () => {},
+  batchUpdatePriorities:   async () => {},
 };
 
 let lastLoggedError = null;
@@ -28,7 +29,6 @@ const mockLogger = {
   error: (_msg, meta) => { lastLoggedError = meta; },
 };
 
-// Pre-populate require cache so sheets-sync picks up our mocks
 before(() => {
   require.cache[require.resolve('../src/sheets')] = { exports: mockSheets };
   require.cache[require.resolve('../src/logger')] = { exports: mockLogger };
@@ -42,23 +42,21 @@ after(() => {
 
 const sheetsSync = require('../src/sheets-sync');
 
-// Helper: wait for the fire-and-forget Promise to settle
 function tick(ms = 20) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// ── Core guarantee: errors never propagate ───────────────────────────────────
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('sheets-sync — fire-and-forget guarantee', () => {
   beforeEach(() => {
     lastLoggedError = null;
-    // Reset all mocks to success
-    mockSheets.appendMainRow   = async () => {};
-    mockSheets.appendLogRow    = async () => {};
-    mockSheets.appendReviewRow = async () => {};
-    mockSheets.updateLogResult = async () => {};
-    mockSheets.findMainRow     = async () => null;
-    mockSheets.updateMainRow   = async () => {};
+    mockSheets.appendMainRow           = async () => {};
+    mockSheets.appendLogRow            = async () => {};
+    mockSheets.appendReviewRow         = async () => {};
+    mockSheets.archiveCompletedVehicle = async () => {};
+    mockSheets.deleteMainRow           = async () => {};
+    mockSheets.batchUpdatePriorities   = async () => {};
   });
 
   it('syncVehicleIn — returns undefined synchronously (fire-and-forget)', () => {
@@ -92,13 +90,10 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     assert.ok(lastLoggedError.error.includes('Quota exceeded'));
   });
 
-  it('syncLogResult — swallows sheets error', async () => {
-    mockSheets.updateLogResult = async () => { throw new Error('Sheet locked'); };
-
+  it('syncLogResult — is a no-op (log is append-only)', async () => {
     sheetsSync.syncLogResult('SK-001', 'VAO: 30A-12345');
     await tick();
-
-    assert.ok(lastLoggedError);
+    assert.equal(lastLoggedError, null);
   });
 
   it('syncReviewInsert — swallows sheets error', async () => {
@@ -110,65 +105,60 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     assert.ok(lastLoggedError);
   });
 
-  it('syncVehicleOut — warns when row not found, does not throw', async () => {
-    let warnCalled = false;
-    mockLogger.warn = () => { warnCalled = true; };
-    mockSheets.findMainRow = async () => null;
+  it('syncVehicleOut — archives vehicle (write-only, no reads)', async () => {
+    let archiveCalled = false;
+    mockSheets.archiveCompletedVehicle = async (rowData) => {
+      archiveCalled = true;
+      assert.equal(rowData.plate, '30A-12345');
+      assert.equal(rowData.status, 'Đã ra xưởng');
+    };
+
+    sheetsSync.syncVehicleOut('30A-12345', 'LX-001', {
+      status: 'Đã ra xưởng',
+      timeOut: '08/03/2026 10:00:00',
+    });
+    await tick();
+
+    assert.ok(archiveCalled, 'archiveCompletedVehicle must be called');
+    assert.equal(lastLoggedError, null);
+  });
+
+  it('syncVehicleOut — swallows archive error', async () => {
+    mockSheets.archiveCompletedVehicle = async () => { throw new Error('API error'); };
 
     sheetsSync.syncVehicleOut('30A-12345', 'LX-001', { status: 'Đã ra xưởng' });
     await tick();
 
-    assert.ok(warnCalled, 'warn should be called when row not found');
-    assert.equal(lastLoggedError, null, 'no error should be logged');
-    mockLogger.warn = () => {};
+    assert.ok(lastLoggedError);
   });
 
-  it('syncVehicleOut — updates, archives, and deletes row when found', async () => {
-    let updateCalled = false;
-    let archiveCalled = false;
-    let deleteCalled = false;
-    mockSheets.findMainRow = async () => ({ rowIndex: 5, data: { plate: '30A-12345', status: 'Đang trong xưởng' } });
-    mockSheets.updateMainRow = async (rowIndex, updates) => {
-      updateCalled = true;
-      assert.equal(rowIndex, 5);
-    };
-    mockSheets.archiveCompletedVehicle = async (rowData) => {
-      archiveCalled = true;
-      assert.ok(rowData.plate);
-    };
-    mockSheets.deleteMainRow = async (rowIndex) => {
-      deleteCalled = true;
-      assert.equal(rowIndex, 5);
-    };
-
-    sheetsSync.syncVehicleOut('30A-12345', 'LX-001', { status: 'Đã ra xưởng', timeOut: '08/03/2026 10:00:00' });
-    await tick();
-
-    assert.ok(updateCalled, 'updateMainRow must be called');
-    assert.ok(archiveCalled, 'archiveCompletedVehicle must be called');
-    assert.ok(deleteCalled, 'deleteMainRow must be called');
-    assert.equal(lastLoggedError, null);
-  });
-
-  it('syncVehiclePriority — updates row when found', async () => {
-    let updateCalled = false;
-    mockSheets.findMainRow = async () => ({ rowIndex: 3 });
-    mockSheets.updateMainRow = async (rowIndex, updates) => {
-      updateCalled = true;
-      assert.equal(updates.priority, 'Khẩn');
-    };
-
+  it('syncVehiclePriority — is a no-op (batch handles this)', async () => {
     sheetsSync.syncVehiclePriority('30A-12345', 'Khẩn', new Date().toISOString());
     await tick();
-
-    assert.ok(updateCalled);
     assert.equal(lastLoggedError, null);
   });
 
-  it('syncVehiclePriority — swallows error from findMainRow', async () => {
-    mockSheets.findMainRow = async () => { throw new Error('API error'); };
+  it('syncPrioritiesBatch — calls batchUpdatePriorities', async () => {
+    let batchCalled = false;
+    mockSheets.batchUpdatePriorities = async (changes) => {
+      batchCalled = true;
+      assert.equal(changes.length, 2);
+    };
 
-    sheetsSync.syncVehiclePriority('30A-12345', 'Cảnh báo', new Date().toISOString());
+    sheetsSync.syncPrioritiesBatch([
+      { plate: '30A-111', priority: 'Khẩn', updatedAt: '2026-03-28' },
+      { plate: '30A-222', priority: 'Cảnh báo', updatedAt: '2026-03-28' },
+    ]);
+    await tick();
+
+    assert.ok(batchCalled);
+    assert.equal(lastLoggedError, null);
+  });
+
+  it('syncPrioritiesBatch — swallows batch error', async () => {
+    mockSheets.batchUpdatePriorities = async () => { throw new Error('Quota exceeded'); };
+
+    sheetsSync.syncPrioritiesBatch([{ plate: '30A-111', priority: 'Khẩn', updatedAt: '2026-03-28' }]);
     await tick();
 
     assert.ok(lastLoggedError);

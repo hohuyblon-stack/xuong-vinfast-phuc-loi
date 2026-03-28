@@ -292,6 +292,7 @@ async function checkTimeAlerts(config) {
   const now      = utils.nowFormatted(tz);
   const vehicles = await db.getAllInWorkshop(tz);
   let updated    = 0;
+  const priorityChanges = [];
 
   for (const v of vehicles) {
     const hours      = utils.hoursSince(v.timeIn, tz);
@@ -302,7 +303,7 @@ async function checkTimeAlerts(config) {
 
     if (newPriority !== v.priority) {
       await db.updateVehiclePriority(v.vehicleId, newPriority, nowIso);
-      sheetsSync.syncVehiclePriority(v.plate, newPriority, now);
+      priorityChanges.push({ plate: v.plate, priority: newPriority, updatedAt: now });
       updated++;
 
       logger.info('Alert level changed', {
@@ -320,6 +321,11 @@ async function checkTimeAlerts(config) {
         });
       }
     }
+  }
+
+  // Batch sync all priority changes to Sheets (2 API calls instead of N*2)
+  if (priorityChanges.length > 0) {
+    sheetsSync.syncPrioritiesBatch(priorityChanges);
   }
 
   return updated;

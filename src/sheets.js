@@ -56,36 +56,69 @@ async function initSheets(config) {
   logger.info('Google Sheets initialized', { spreadsheetId });
 }
 
+// Old tab names → new tab names (for migration)
+const TAB_RENAMES = {
+  'DANH SÁCH CHÍNH': 'ĐANG TRONG XƯỞNG',
+  'ĐÃ HOÀN THÀNH': 'ĐÃ RA XƯỞNG',
+};
+
 /**
  * Tao tab neu chua co, ghi header neu tab trong.
+ * Tu dong rename tab cu neu gap (migration).
  */
 async function ensureTabs() {
   const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
-  const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
+  const sheets = spreadsheet.data.sheets;
+  const existingNames = sheets.map(s => s.properties.title);
+
+  // Rename old tabs if found (one-time migration)
+  const renameRequests = [];
+  for (const s of sheets) {
+    const oldName = s.properties.title;
+    const newName = TAB_RENAMES[oldName];
+    if (newName && !existingNames.includes(newName)) {
+      renameRequests.push({
+        updateSheetProperties: {
+          properties: { sheetId: s.properties.sheetId, title: newName },
+          fields: 'title',
+        },
+      });
+      logger.info(`Renaming tab "${oldName}" → "${newName}"`);
+    }
+  }
+  if (renameRequests.length > 0) {
+    await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: renameRequests },
+    });
+    // Refresh names after rename
+    const refreshed = await sheetsApi.spreadsheets.get({ spreadsheetId });
+    existingNames.length = 0;
+    existingNames.push(...refreshed.data.sheets.map(s => s.properties.title));
+  }
 
   const tabConfigs = [
     { key: 'main', name: tabNames.main, columns: COLUMNS.main },
     { key: 'completed', name: tabNames.completed, columns: COLUMNS.completed },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
-    // dailyReport: mỗi ngày tạo tab riêng trong writeDailyReportTab()
   ];
 
-  const requests = [];
+  const addRequests = [];
   for (const tab of tabConfigs) {
-    if (!existingSheets.includes(tab.name)) {
-      requests.push({
+    if (!existingNames.includes(tab.name)) {
+      addRequests.push({
         addSheet: { properties: { title: tab.name } },
       });
     }
   }
 
-  if (requests.length > 0) {
+  if (addRequests.length > 0) {
     await sheetsApi.spreadsheets.batchUpdate({
       spreadsheetId,
-      requestBody: { requests },
+      requestBody: { requests: addRequests },
     });
-    logger.info('Created missing tabs', { count: requests.length });
+    logger.info('Created missing tabs', { count: addRequests.length });
   }
 
   for (const tab of tabConfigs) {
@@ -100,7 +133,6 @@ async function ensureTabs() {
       });
       logger.info(`Wrote header for tab "${tab.name}"`);
 
-      // Apply professional formatting to main + completed tabs
       if (tab.key === 'main' || tab.key === 'completed') {
         try {
           const sid = await getSheetIdByName(tab.name);
@@ -156,285 +188,50 @@ async function appendMainRow(row) {
 }
 
 /**
- * Tim dong theo bien so + trang thai.
- * Tra ve { rowIndex (1-based), data } hoac null.
+ * Batch update priorities — 1 read + 1 batchUpdate thay vi N*2 calls.
+ * @param {Array<{plate: string, priority: string, updatedAt: string}>} changes
  */
-async function findMainRow(plate, status) {
+async function batchUpdatePriorities(changes) {
+  if (!changes.length) return;
+
+  // 1 API call: read toàn bộ main sheet
   const range = `'${tabNames.main}'!A:K`;
   const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
   const rows = res.data.values || [];
 
+  // Build plate → rowIndex map
+  const plateToRow = new Map();
   for (let i = rows.length - 1; i >= 1; i--) {
-    const row = rows[i];
-    if (row[1] === plate && row[7] === status) {
-      return {
-        rowIndex: i + 1,
-        data: {
-          vehicleId: row[0],
-          plate: row[1],
-          timeIn: row[2],
-          timeOut: row[3],
-          duration: row[4],
-          imageIn: row[5],
-          imageOut: row[6],
-          status: row[7],
-          priority: row[8],
-          note: row[9],
-          updatedAt: row[10],
-        },
-      };
-    }
-  }
-  return null;
-}
-
-/**
- * Cap nhat 1 dong (partial update).
- */
-async function updateMainRow(rowIndex, updates) {
-  const range = `'${tabNames.main}'!A${rowIndex}:K${rowIndex}`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const current = (res.data.values && res.data.values[0]) || [];
-
-  const fieldMap = {
-    vehicleId: 0, plate: 1, timeIn: 2, timeOut: 3,
-    duration: 4, imageIn: 5, imageOut: 6, status: 7,
-    priority: 8, note: 9, updatedAt: 10,
-  };
-
-  const updated = [...current];
-  while (updated.length < 11) updated.push('');
-
-  for (const [field, value] of Object.entries(updates)) {
-    if (fieldMap[field] !== undefined) {
-      updated[fieldMap[field]] = value;
+    const plate = rows[i][1];
+    const status = rows[i][7];
+    if (status === 'Đang trong xưởng' && !plateToRow.has(plate)) {
+      plateToRow.set(plate, i + 1); // 1-based
     }
   }
 
-  await sheetsApi.spreadsheets.values.update({
-    spreadsheetId,
-    range,
-    valueInputOption: 'RAW',
-    requestBody: { values: [updated] },
-  });
-
-  logger.info('Updated main row', { rowIndex, updates });
-}
-
-/**
- * Lay tat ca xe "Dang trong xuong".
- */
-async function getAllInWorkshop() {
-  const range = `'${tabNames.main}'!A:K`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row[7] === 'Đang trong xưởng') {
-      results.push({
-        rowIndex: i + 1,
-        vehicleId: row[0],
-        plate: row[1],
-        timeIn: row[2],
-        priority: row[8],
-        note: row[9] || '',
-      });
-    }
-  }
-  return results;
-}
-
-/**
- * Lay tat ca dong trong DANH SACH CHINH (ca vao lan ra).
- * Dung cho bao cao ke toan.
- */
-async function getAllMainRows() {
-  const range = `'${tabNames.main}'!A:K`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-  const results = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row[1]) continue;
-    results.push({
-      rowIndex: i + 1,
-      vehicleId: row[0] || '',
-      plate:     row[1] || '',
-      timeIn:    row[2] || '',
-      timeOut:   row[3] || '',
-      duration:  row[4] || '',
-      status:    row[7] || '',
-      priority:  row[8] || '',
-      note:      row[9] || '',
+  // Build batch data
+  const data = [];
+  for (const c of changes) {
+    const rowIndex = plateToRow.get(c.plate);
+    if (!rowIndex) continue;
+    data.push({
+      range: `'${tabNames.main}'!I${rowIndex}:K${rowIndex}`,
+      values: [[c.priority, rows[rowIndex - 1][9] || '', c.updatedAt]],
     });
   }
-  return results;
-}
 
-/**
- * Lay thong ke tong hop.
- */
-async function getDailySummary(tz) {
-  const { DateTime } = require('luxon');
-  const today = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy');
+  if (!data.length) return;
 
-  const range = `'${tabNames.main}'!A:K`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
+  // 1 API call: batch update all priorities
+  await sheetsApi.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: 'RAW',
+      data,
+    },
+  });
 
-  let totalIn = 0;
-  let totalOut = 0;
-  let inWorkshop = 0;
-  let warningCount = 0;
-  let urgentCount = 0;
-  let totalDuration = 0;
-  let completedCount = 0;
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const timeIn = row[2] || '';
-    const timeOut = row[3] || '';
-    const duration = parseInt(row[4], 10);
-    const status = row[7] || '';
-    const priority = row[8] || '';
-
-    if (timeIn.startsWith(today)) totalIn++;
-    if (timeOut.startsWith(today)) totalOut++;
-    if (status === 'Đang trong xưởng') {
-      inWorkshop++;
-      if (priority === 'Cảnh báo') warningCount++;
-      if (priority === 'Khẩn') urgentCount++;
-    }
-    if (timeOut.startsWith(today) && !isNaN(duration)) {
-      totalDuration += duration;
-      completedCount++;
-    }
-  }
-
-  const reviewRange = `'${tabNames.review}'!A:M`;
-  const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
-  const reviewRows = reviewRes.data.values || [];
-  let pendingReview = 0;
-  for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][8] === 'Chưa xử lý') pendingReview++;
-  }
-
-  return {
-    today,
-    totalIn,
-    totalOut,
-    inWorkshop,
-    warningCount,
-    urgentCount,
-    pendingReview,
-    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
-  };
-}
-
-/**
- * Lay du lieu nang suat chi tiet cho bao cao NANGSUAT.
- */
-async function getProductivityData(tz) {
-  const { DateTime } = require('luxon');
-  const now = DateTime.now().setZone(tz);
-  const today = now.toFormat('dd/MM/yyyy');
-  const yesterday = now.minus({ days: 1 }).toFormat('dd/MM/yyyy');
-
-  const range = `'${tabNames.main}'!A:K`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-
-  let todayIn = 0;
-  let todayOut = 0;
-  let inWorkshop = 0;
-  let warningCount = 0;
-  let urgentCount = 0;
-  let totalDuration = 0;
-  let completedCount = 0;
-  let fastestVehicle = null;
-  let slowestVehicle = null;
-
-  let yesterdayIn = 0;
-  let yesterdayOut = 0;
-  let yesterdayTotalDuration = 0;
-  let yesterdayCompletedCount = 0;
-
-  const timeSlots = { sang: 0, chieu: 0, toi: 0, dem: 0 };
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const plate = row[1] || '';
-    const timeIn = row[2] || '';
-    const timeOut = row[3] || '';
-    const duration = parseInt(row[4], 10);
-    const status = row[7] || '';
-    const priority = row[8] || '';
-
-    if (timeIn.startsWith(today)) {
-      todayIn++;
-      const hourMatch = timeIn.match(/\d{2}\/\d{2}\/\d{4} (\d{2}):/);
-      if (hourMatch) {
-        const h = parseInt(hourMatch[1], 10);
-        if (h >= 6 && h < 12) timeSlots.sang++;
-        else if (h >= 12 && h < 18) timeSlots.chieu++;
-        else if (h >= 18) timeSlots.toi++;
-        else timeSlots.dem++;
-      }
-    }
-    if (timeOut.startsWith(today)) todayOut++;
-    if (timeIn.startsWith(yesterday)) yesterdayIn++;
-    if (timeOut.startsWith(yesterday)) yesterdayOut++;
-
-    if (status === 'Đang trong xưởng') {
-      inWorkshop++;
-      if (priority === 'Cảnh báo') warningCount++;
-      if (priority === 'Khẩn') urgentCount++;
-    }
-
-    if (timeOut.startsWith(today) && !isNaN(duration)) {
-      totalDuration += duration;
-      completedCount++;
-      if (!fastestVehicle || duration < fastestVehicle.duration) fastestVehicle = { plate, duration };
-      if (!slowestVehicle || duration > slowestVehicle.duration) slowestVehicle = { plate, duration };
-    }
-
-    if (timeOut.startsWith(yesterday) && !isNaN(duration)) {
-      yesterdayTotalDuration += duration;
-      yesterdayCompletedCount++;
-    }
-  }
-
-  const reviewRange = `'${tabNames.review}'!A:M`;
-  const reviewRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range: reviewRange });
-  const reviewRows = reviewRes.data.values || [];
-  let pendingReview = 0;
-  for (let i = 1; i < reviewRows.length; i++) {
-    if (reviewRows[i][8] === 'Chưa xử lý') pendingReview++;
-  }
-
-  return {
-    today,
-    yesterday,
-    todayIn,
-    todayOut,
-    inWorkshop,
-    warningCount,
-    urgentCount,
-    pendingReview,
-    completedCount,
-    avgDuration: completedCount > 0 ? Math.round(totalDuration / completedCount) : 0,
-    fastestVehicle,
-    slowestVehicle,
-    timeSlots,
-    yesterdayIn,
-    yesterdayOut,
-    yesterdayAvgDuration: yesterdayCompletedCount > 0
-      ? Math.round(yesterdayTotalDuration / yesterdayCompletedCount) : 0,
-    completionRate: todayIn > 0 ? Math.round((todayOut / todayIn) * 100) : 0,
-  };
+  logger.info('Batch updated priorities', { count: data.length });
 }
 
 // ──────────────────────────────────────────────
@@ -465,25 +262,7 @@ async function appendLogRow(row) {
   logger.info('Appended log row', { eventId: row.eventId });
 }
 
-async function updateLogResult(eventId, result) {
-  const range = `'${tabNames.log}'!A:I`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-
-  for (let i = rows.length - 1; i >= 1; i--) {
-    if (rows[i][0] === eventId) {
-      const rowIndex = i + 1;
-      await sheetsApi.spreadsheets.values.update({
-        spreadsheetId,
-        range: `'${tabNames.log}'!I${rowIndex}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[result]] },
-      });
-      logger.info('Updated log result', { eventId, result });
-      return;
-    }
-  }
-}
+// updateLogResult REMOVED — log tab is append-only, result stored in DB
 
 // ──────────────────────────────────────────────
 // CAN KIEM TRA
@@ -595,26 +374,10 @@ async function writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowI
   logger.info('Wrote daily report tab', { tabName, rows: rows.length });
 }
 
-// ──────────────────────────────────────────────
-// Idempotency check
-// ──────────────────────────────────────────────
-
-async function isMessageProcessed(messageId) {
-  const range = `'${tabNames.log}'!H:H`;
-  const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
-  const rows = res.data.values || [];
-
-  const marker = `[MSG_ID:${messageId}]`;
-  for (const row of rows) {
-    if (row[0] && row[0].includes(marker)) {
-      return true;
-    }
-  }
-  return false;
-}
+// isMessageProcessed REMOVED — idempotency check uses DB
 
 // ──────────────────────────────────────────────
-// Archive (xe đã ra → ĐÃ HOÀN THÀNH)
+// Archive (xe đã ra)
 // ──────────────────────────────────────────────
 
 /**
@@ -701,11 +464,8 @@ function colLetter(n) {
 module.exports = {
   initSheets,
   appendMainRow,
-  findMainRow,
-  updateMainRow,
-  getAllMainRows,
+  batchUpdatePriorities,
   appendLogRow,
-  updateLogResult,
   appendReviewRow,
   writeDailyReportTab,
   archiveCompletedVehicle,

@@ -38,8 +38,8 @@ function loadConfig() {
       spreadsheetId: requireEnv('GOOGLE_SHEET_ID'),
       credentials: JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
       tabNames: {
-        main: optionalEnv('SHEET_TAB_MAIN', 'DANH SÁCH CHÍNH'),
-        completed: optionalEnv('SHEET_TAB_COMPLETED', 'ĐÃ HOÀN THÀNH'),
+        main: optionalEnv('SHEET_TAB_MAIN', 'ĐANG TRONG XƯỞNG'),
+        completed: optionalEnv('SHEET_TAB_COMPLETED', 'ĐÃ RA XƯỞNG'),
         log: optionalEnv('SHEET_TAB_LOG', 'NHẬT KÝ'),
         review: optionalEnv('SHEET_TAB_REVIEW', 'CẦN KIỂM TRA'),
         dailyReport: optionalEnv('SHEET_TAB_DAILY_REPORT', 'BÁO CÁO HÀNG NGÀY'),
