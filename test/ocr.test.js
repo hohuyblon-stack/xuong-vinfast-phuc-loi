@@ -1,213 +1,206 @@
 'use strict';
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
+const axios = require('axios');
+
+// Must mock before requiring ocr module
+const originalPost = axios.post;
+const originalGet = axios.get;
+
 const { initOcr, recognizePlate } = require('../src/ocr');
 
-// Mock axios and vision client
-const axios = require('axios');
-const vision = require('@google-cloud/vision');
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
 
-const originalAxiosGet = axios.get;
-const originalVisionClient = vision.ImageAnnotatorClient;
+function mockImageDownload() {
+  // JPEG magic bytes + dummy data
+  const jpegBuffer = Buffer.from([0xFF, 0xD8, 0x00, 0x00]);
+  axios.get = async () => ({ data: jpegBuffer });
+}
+
+function mockPoeResponse(content) {
+  axios.post = async () => ({
+    data: {
+      choices: [{ message: { content } }],
+    },
+  });
+}
+
+function mockPoeError(status, data) {
+  axios.post = async () => {
+    const err = new Error(`Request failed with status code ${status}`);
+    err.response = { status, data };
+    throw err;
+  };
+}
+
+// ──────────────────────────────────────────────
+// Setup / Teardown
+// ──────────────────────────────────────────────
+
+beforeEach(() => {
+  mockImageDownload();
+  initOcr({ apiKey: 'test-key', model: 'GPT-4o-mini' });
+});
+
+afterEach(() => {
+  axios.post = originalPost;
+  axios.get = originalGet;
+});
 
 // ──────────────────────────────────────────────
 // Test: initOcr
 // ──────────────────────────────────────────────
 
 describe('initOcr', () => {
-  it('should initialize OCR client', () => {
-    const mockCredentials = { type: 'service_account', project_id: 'test' };
-    // Just ensure it doesn't throw
-    initOcr(mockCredentials);
-    assert.ok(true);
+  it('should initialize with apiKey and model', () => {
+    assert.doesNotThrow(() => {
+      initOcr({ apiKey: 'test-key', model: 'GPT-4o-mini' });
+    });
+  });
+
+  it('should default to GPT-4o-mini model', () => {
+    assert.doesNotThrow(() => {
+      initOcr({ apiKey: 'test-key' });
+    });
   });
 });
 
 // ──────────────────────────────────────────────
-// Test: recognizePlate
+// Test: recognizePlate — success cases
 // ──────────────────────────────────────────────
 
-beforeEach(() => {
-  // Setup mock vision client
-  vision.ImageAnnotatorClient = function() {
-    this.textDetection = async () => [null];
-  };
-
-  initOcr({ type: 'service_account', project_id: 'test' });
-});
-
 describe('recognizePlate', () => {
-  it('should extract valid license plate from vision response', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should extract valid license plate from Poe response', async () => {
+    mockPoeResponse('{"plate": "30A-12345", "vehicle_model": "VF 8"}');
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [
-          { description: '30A-12345' },
-          { description: '30A' },
-          { description: '12345' },
-        ],
-      }];
-    };
-
-    initOcr({ type: 'service_account', project_id: 'test' });
     const result = await recognizePlate('https://example.com/plate.jpg');
 
     assert.equal(result.plateText, '30A-12345');
-    assert.ok(result.confidence > 0);
+    assert.ok(result.confidence >= 0.8);
+    assert.equal(result.vehicleModel, 'VF 8');
+    assert.ok(result.modelConfidence > 0);
   });
 
-  it('should handle multi-line plate detection', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should handle plate without vehicle model', async () => {
+    mockPoeResponse('{"plate": "51F1-99999", "vehicle_model": ""}');
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [
-          { description: '30A\n12345' }, // Multi-line format
-          { description: '30A' },
-          { description: '12345' },
-        ],
-      }];
-    };
-
-    initOcr({ type: 'service_account', project_id: 'test' });
     const result = await recognizePlate('https://example.com/plate.jpg');
 
-    // Should still extract valid plate
-    assert.ok(result.plateText !== '');
+    assert.equal(result.plateText, '51F1-99999');
+    assert.ok(result.confidence > 0);
+    assert.equal(result.vehicleModel, '');
   });
 
-  it('should return empty result when no text detected', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should handle response with extra text around JSON', async () => {
+    mockPoeResponse('Here is the result:\n{"plate": "29B1-23456", "vehicle_model": "Fadil"}\nDone.');
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [], // Empty annotations
-      }];
-    };
+    const result = await recognizePlate('https://example.com/plate.jpg');
 
-    initOcr({ type: 'service_account', project_id: 'test' });
+    assert.equal(result.plateText, '29B1-23456');
+    assert.equal(result.vehicleModel, 'Fadil');
+  });
+
+  it('should return lower confidence for non-standard plate format', async () => {
+    mockPoeResponse('{"plate": "ABCD1234", "vehicle_model": ""}');
+
+    const result = await recognizePlate('https://example.com/plate.jpg');
+
+    assert.equal(result.confidence, 0.5);
+  });
+
+  it('should return empty result when no plate detected', async () => {
+    mockPoeResponse('{"plate": "", "vehicle_model": ""}');
+
     const result = await recognizePlate('https://example.com/blank.jpg');
 
     assert.equal(result.plateText, '');
     assert.equal(result.confidence, 0);
   });
 
-  it('should use fallback when no valid plate found', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should store raw LLM response in rawTexts', async () => {
+    const response = '{"plate": "30A-12345", "vehicle_model": ""}';
+    mockPoeResponse(response);
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [
-          { description: 'Random text with numbers 123 456' },
-          { description: 'Random' },
-        ],
-      }];
-    };
+    const result = await recognizePlate('https://example.com/plate.jpg');
 
-    initOcr({ type: 'service_account', project_id: 'test' });
-    const result = await recognizePlate('https://example.com/bad.jpg');
-
-    // Fallback should pick text with 2+ digits
-    assert.ok(result.plateText !== '' || result.confidence === 0);
+    assert.ok(Array.isArray(result.rawTexts));
+    assert.equal(result.rawTexts[0], response);
   });
 
-  it('should handle image download error', async () => {
-    axios.get = async () => {
-      throw new Error('Download failed');
-    };
+  // ──────────────────────────────────────────────
+  // Test: recognizePlate — error handling
+  // ──────────────────────────────────────────────
 
-    initOcr({ type: 'service_account', project_id: 'test' });
+  it('should handle Poe API 403 error gracefully', async () => {
+    mockPoeError(403, '403 Forbidden');
+
+    const result = await recognizePlate('https://example.com/plate.jpg');
+
+    assert.equal(result.plateText, '');
+    assert.equal(result.confidence, 0);
+  });
+
+  it('should handle Poe API 429 rate limit', async () => {
+    mockPoeError(429, 'Rate limited');
+
+    const result = await recognizePlate('https://example.com/plate.jpg');
+
+    assert.equal(result.plateText, '');
+    assert.equal(result.confidence, 0);
+  });
+
+  it('should handle image download failure', async () => {
+    axios.get = async () => { throw new Error('Download failed'); };
+
     const result = await recognizePlate('https://broken.example.com/image.jpg');
 
     assert.equal(result.plateText, '');
     assert.equal(result.confidence, 0);
   });
 
-  it('should handle vision API error response', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should handle malformed JSON response', async () => {
+    mockPoeResponse('I cannot read this image clearly');
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        error: { message: 'API error' },
-      }];
-    };
-
-    initOcr({ type: 'service_account', project_id: 'test' });
-    const result = await recognizePlate('https://example.com/error.jpg');
+    const result = await recognizePlate('https://example.com/plate.jpg');
 
     assert.equal(result.plateText, '');
     assert.equal(result.confidence, 0);
   });
 
-  it('should prioritize valid format matches', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
-    };
+  it('should throw if initOcr was not called', async () => {
+    // Reset by passing null key
+    initOcr({ apiKey: null });
 
-    // annotations[0] = full text (all lines), annotations[1..n] = individual blocks
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [
-          { description: '30A-12345\n51F1-99999' }, // Full text (line-separated)
-          { description: '30A-12345' },
-          { description: '51F1-99999' },
-        ],
-      }];
-    };
-
-    initOcr({ type: 'service_account', project_id: 'test' });
-    const result = await recognizePlate('https://example.com/multiple.jpg');
-
-    // Should pick one of the valid plates (highest score)
-    assert.ok(['30A-12345', '51F1-99999'].includes(result.plateText));
-    assert.ok(result.confidence > 0.5);
+    // recognizePlate uses poeApiKey check
+    await assert.rejects(
+      () => recognizePlate('https://example.com/plate.jpg'),
+      { message: /not initialized/ },
+    );
   });
 
-  it('should return rawTexts array', async () => {
-    axios.get = async () => {
-      return {
-        data: Buffer.from('fake image data'),
-      };
+  // ──────────────────────────────────────────────
+  // Test: Poe API request format
+  // ──────────────────────────────────────────────
+
+  it('should send correct request format to Poe API', async () => {
+    let capturedUrl, capturedBody, capturedHeaders;
+
+    axios.post = async (url, body, config) => {
+      capturedUrl = url;
+      capturedBody = body;
+      capturedHeaders = config.headers;
+      return { data: { choices: [{ message: { content: '{"plate":"30A-12345","vehicle_model":""}' } }] } };
     };
 
-    vision.ImageAnnotatorClient = function() {
-      this.textDetection = async () => [{
-        textAnnotations: [
-          { description: 'Full text' },
-          { description: 'Full' },
-          { description: 'text' },
-        ],
-      }];
-    };
+    await recognizePlate('https://example.com/plate.jpg');
 
-    initOcr({ type: 'service_account', project_id: 'test' });
-    const result = await recognizePlate('https://example.com/text.jpg');
-
-    assert.ok(Array.isArray(result.rawTexts));
-    assert.ok(result.rawTexts.length > 0);
+    assert.ok(capturedUrl.includes('api.poe.com/v1'));
+    assert.equal(capturedBody.model, 'GPT-4o-mini');
+    assert.ok(capturedBody.messages[0].content[1].type, 'image_url');
+    assert.ok(capturedHeaders['Authorization'].startsWith('Bearer '));
+    assert.ok(capturedBody.max_tokens >= 16);
   });
 });

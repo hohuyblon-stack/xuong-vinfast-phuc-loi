@@ -80,7 +80,7 @@ async function recognizePlate(imageUrl) {
         },
       ],
       temperature: 0,
-      max_tokens: 200,
+      max_tokens: 256,
     }, {
       headers: {
         'Authorization': `Bearer ${poeApiKey}`,
