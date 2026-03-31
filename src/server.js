@@ -41,8 +41,8 @@ async function bootstrap() {
   initDb(config);
   await testConnection(); // Fail-fast nếu credentials sai
 
-  // Init OCR — synchronous
-  initOcr(config.ocr.credentials);
+  // Init OCR (Poe API)
+  initOcr(config.ocr);
 
   // Init Telegram Bot — synchronous
   initTelegram(config.telegram.botToken);

@@ -46,11 +46,10 @@ function loadConfig() {
       },
     },
 
-    // OCR (Google Cloud Vision)
+    // OCR (Poe API)
     ocr: {
-      credentials: process.env.GOOGLE_VISION_CREDENTIALS_JSON
-        ? JSON.parse(process.env.GOOGLE_VISION_CREDENTIALS_JSON)
-        : JSON.parse(requireEnv('GOOGLE_CREDENTIALS_JSON')),
+      apiKey: requireEnv('POE_API_KEY'),
+      model: optionalEnv('POE_OCR_MODEL', 'GPT-4o-mini'),
       confidenceHigh: parseFloat(optionalEnv('OCR_CONFIDENCE_HIGH', '0.8')),
       confidenceMedium: parseFloat(optionalEnv('OCR_CONFIDENCE_MEDIUM', '0.5')),
     },
