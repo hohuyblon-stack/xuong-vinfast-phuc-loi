@@ -7,7 +7,7 @@ const logger = require('./logger');
 let poeApiKey = null;
 let poeModel = null;
 
-const POE_BASE_URL = 'https://api.poe.com/openai/chat/completions';
+const POE_BASE_URL = 'https://api.poe.com/v1/chat/completions';
 
 const OCR_PROMPT = `Bạn là hệ thống OCR biển số xe Việt Nam. Phân tích ảnh và trích xuất:
 1. Biển số xe Việt Nam (format ví dụ: 30A-12345, 29B1-234.56)
