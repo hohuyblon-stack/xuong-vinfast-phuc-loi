@@ -170,6 +170,38 @@ describe('recognizePlate', () => {
     assert.equal(result.confidence, 0);
   });
 
+  it('should handle invalid JSON that matches regex but fails parse', async () => {
+    // Contains { } but invalid JSON inside — hits the catch block in parseOcrResponse
+    mockPoeResponse('Result: {plate: broken, not valid json}');
+
+    const result = await recognizePlate('https://example.com/plate.jpg');
+
+    assert.equal(result.plateText, '');
+    assert.equal(result.confidence, 0);
+  });
+
+  it('should detect PNG mime type', async () => {
+    // PNG magic bytes: 0x89 0x50
+    const pngBuffer = Buffer.from([0x89, 0x50, 0x4E, 0x47]);
+    axios.get = async () => ({ data: pngBuffer });
+    mockPoeResponse('{"plate": "30A-12345", "vehicle_model": ""}');
+
+    const result = await recognizePlate('https://example.com/plate.png');
+
+    assert.equal(result.plateText, '30A-12345');
+  });
+
+  it('should fallback to jpeg for unknown image format', async () => {
+    // Unknown magic bytes — hits the default return
+    const unknownBuffer = Buffer.from([0x00, 0x00, 0x00, 0x00]);
+    axios.get = async () => ({ data: unknownBuffer });
+    mockPoeResponse('{"plate": "30A-12345", "vehicle_model": ""}');
+
+    const result = await recognizePlate('https://example.com/plate.bmp');
+
+    assert.equal(result.plateText, '30A-12345');
+  });
+
   it('should throw if initOcr was not called', async () => {
     // Reset by passing null key
     initOcr({ apiKey: null });

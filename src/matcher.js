@@ -71,7 +71,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: 'Không đọc được biển số trong ảnh.\nVui lòng chụp lại rõ hơn, chụp thẳng vào biển số nhé.',
+      replyMessage: 'Xin lỗi, không đọc được biển số trong ảnh.\nVui lòng chụp lại rõ hơn, chụp thẳng vào biển số nhé.',
       eventId,
     };
   }
@@ -90,7 +90,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: `Đọc biển số chưa chắc chắn: ${plate}\nVui lòng chụp lại ảnh rõ hơn nhé.`,
+      replyMessage: `Xin lỗi, đọc biển số chưa chắc chắn: ${plate}\nVui lòng chụp lại ảnh rõ hơn nhé.`,
       eventId,
     };
   }
@@ -109,7 +109,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: `Biển số đọc được (${plate}) không đúng định dạng.\nVui lòng chụp lại ảnh rõ hơn nhé.`,
+      replyMessage: `Xin lỗi, biển số đọc được (${plate}) không đúng định dạng.\nVui lòng chụp lại ảnh rõ hơn nhé.`,
       eventId,
     };
   }
@@ -139,7 +139,7 @@ async function processVehicleEvent(event, config) {
 
     return {
       success: false,
-      replyMessage: `⚠️ Hệ thống gặp lỗi khi xử lý xe ${plate}.\nVui lòng gửi lại ảnh để thử lại nhé.`,
+      replyMessage: `⚠️ Xin lỗi, hệ thống gặp lỗi khi xử lý xe ${plate}.\nVui lòng gửi lại ảnh để thử lại nhé.`,
       eventId,
     };
   }
@@ -163,7 +163,7 @@ async function processVehicleEvent(event, config) {
     });
 
     logger.info('Vehicle IN processed', { vehicleId: decision.vehicle_id, plate });
-    let replyMsg = `✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}`;
+    let replyMsg = `Cảm ơn! ✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}`;
     if (vehicleModel) replyMsg += `\nLoại xe: ${vehicleModel}`;
     replyMsg += `\nLúc: ${now}\nMã lượt: ${decision.vehicle_id}`;
     return {
@@ -185,7 +185,7 @@ async function processVehicleEvent(event, config) {
     return {
       success: false,
       replyMessage:
-        `⏳ Xe ${plate} mới vào lúc ${timeInFormatted}, chưa đủ ${config.alerts.minWorkshopMinutes} phút.\n` +
+        `Cảm ơn! ⏳ Xe ${plate} mới vào lúc ${timeInFormatted}, chưa đủ ${config.alerts.minWorkshopMinutes} phút.\n` +
         `Hệ thống chưa ghi RA. Vui lòng gửi lại ảnh sau.`,
       eventId,
     };
@@ -207,7 +207,7 @@ async function processVehicleEvent(event, config) {
   });
 
   logger.info('Vehicle OUT processed', { vehicleId: decision.vehicle_id, plate, duration });
-  let replyMsgOut = `🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}`;
+  let replyMsgOut = `Cảm ơn! 🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}`;
   if (vehicleModel) replyMsgOut += `\nLoại xe: ${vehicleModel}`;
   replyMsgOut += `\nLúc: ${now}\nThời gian lưu: ${durationStr}\nMã lượt: ${decision.vehicle_id}`;
   return {
@@ -812,7 +812,7 @@ async function handleManualExit(plate, senderName, config) {
   const result = await db.forceExitByPlate(plate, nowIso);
 
   if (!result) {
-    return { replyMessage: `❌ Không tìm thấy xe ${plate} đang trong xưởng.` };
+    return { replyMessage: `Xin lỗi, không tìm thấy xe ${plate} đang trong xưởng.` };
   }
 
   const durationStr = utils.formatDuration(result.duration);
@@ -830,7 +830,7 @@ async function handleManualExit(plate, senderName, config) {
 
   return {
     replyMessage:
-      `✅ Đã ghi nhận xe RA xưởng (thủ công)\n` +
+      `Cảm ơn! ✅ Đã ghi nhận xe RA xưởng (thủ công)\n` +
       `Biển số: ${plate}\n` +
       `Vào lúc: ${result.timeIn}\n` +
       `Thời gian lưu: ${durationStr}\n` +

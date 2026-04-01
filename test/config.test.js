@@ -49,6 +49,7 @@ describe('loadConfig', () => {
       'GOOGLE_CREDENTIALS_JSON': '{}',
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'test-key',
+      'POE_API_KEY': 'poe-key',
     });
 
     const { loadConfig } = require('../src/config');
@@ -68,6 +69,7 @@ describe('loadConfig', () => {
       'GOOGLE_CREDENTIALS_JSON': '{}',
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'test-key',
+      'POE_API_KEY': 'poe-key',
     });
 
     const { loadConfig } = require('../src/config');
@@ -87,6 +89,7 @@ describe('loadConfig', () => {
       'GOOGLE_CREDENTIALS_JSON': 'invalid json',
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'test-key',
+      'POE_API_KEY': 'poe-key',
     });
 
     const { loadConfig } = require('../src/config');
@@ -107,6 +110,7 @@ describe('loadConfig', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'service-key-789',
+      'POE_API_KEY': 'poe-key-123',
     });
 
     const { loadConfig } = require('../src/config');
@@ -116,6 +120,7 @@ describe('loadConfig', () => {
     assert.equal(config.sheets.spreadsheetId, 'sheet-id-456');
     assert.equal(config.supabase.url, 'https://test.supabase.co');
     assert.equal(config.supabase.serviceKey, 'service-key-789');
+    assert.equal(config.ocr.apiKey, 'poe-key-123');
   });
 });
 
@@ -141,6 +146,7 @@ describe('config optional fields and defaults', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'PORT': undefined,
     });
 
@@ -158,6 +164,7 @@ describe('config optional fields and defaults', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'PORT': '8080',
     });
 
@@ -176,6 +183,7 @@ describe('config optional fields and defaults', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'NODE_ENV': undefined,
     });
 
@@ -193,6 +201,7 @@ describe('config optional fields and defaults', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'TIMEZONE': undefined,
     });
 
@@ -210,6 +219,7 @@ describe('config optional fields and defaults', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'TIMEZONE': 'UTC',
     });
 
@@ -242,6 +252,7 @@ describe('config alert thresholds', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'ALERT_HOURS_WARNING': '24.5',
       'ALERT_HOURS_URGENT': '48.5',
     });
@@ -261,6 +272,7 @@ describe('config alert thresholds', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'MIN_WORKSHOP_MINUTES': '30',
     });
 
@@ -278,6 +290,7 @@ describe('config alert thresholds', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'ALERT_HOURS_WARNING': undefined,
       'ALERT_HOURS_URGENT': undefined,
       'MIN_WORKSHOP_MINUTES': undefined,
@@ -314,6 +327,7 @@ describe('config manager chat IDs', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'MANAGER_CHAT_IDS': '123,456, 789 ',
     });
 
@@ -331,6 +345,7 @@ describe('config manager chat IDs', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'MANAGER_CHAT_IDS': '',
     });
 
@@ -348,6 +363,7 @@ describe('config manager chat IDs', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'DAILY_REPORT_HOUR': '22',
     });
 
@@ -380,6 +396,7 @@ describe('config OCR thresholds', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'OCR_CONFIDENCE_HIGH': '0.9',
       'OCR_CONFIDENCE_MEDIUM': '0.6',
     });
@@ -399,6 +416,7 @@ describe('config OCR thresholds', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'OCR_CONFIDENCE_HIGH': undefined,
       'OCR_CONFIDENCE_MEDIUM': undefined,
     });
@@ -433,6 +451,7 @@ describe('config sheet tab names', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
     });
 
     const { loadConfig } = require('../src/config');
@@ -451,6 +470,7 @@ describe('config sheet tab names', () => {
       'GOOGLE_CREDENTIALS_JSON': credentialsJson,
       'SUPABASE_URL': 'https://test.supabase.co',
       'SUPABASE_SERVICE_KEY': 'key',
+      'POE_API_KEY': 'poe-key',
       'SHEET_TAB_MAIN': 'MAIN',
       'SHEET_TAB_LOG': 'LOG',
       'SHEET_TAB_REVIEW': 'REVIEW',
