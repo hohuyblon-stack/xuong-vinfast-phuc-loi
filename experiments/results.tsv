@@ -5,3 +5,4 @@ experiment	commit	metric_value	baseline_delta	status	description
 3	ad5a686	117.95	+15.54	keep	db.js query function tests (80.19% → 84.35%)
 4	a2a38e8	121.70	+19.29	keep	matcher handler tests (84.35% → 86.60%)
 5	6d3acdf	124.42	+22.01	keep	productivity/full/morning report tests (86.60% → 88.82%)
+6	dcfd5b1	124.99	+22.58	keep	checkTimeAlerts priority change tests (88.82% → 89.09%)
