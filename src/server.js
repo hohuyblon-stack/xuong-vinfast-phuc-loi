@@ -6,7 +6,7 @@ const express = require('express');
 const { loadConfig } = require('./config');
 const { initOcr, recognizePlate } = require('./ocr');
 const { initSheets } = require('./sheets');
-const { initDb, testConnection, isMessageProcessed, expireStaleVehicles, forceExitVehicle, countInWorkshop } = require('./db');
+const { initDb, testConnection, isMessageProcessed, expireStaleVehicles, autoCloseVehicles, forceExitVehicle, countInWorkshop } = require('./db');
 const { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook, getWebhookInfo } = require('./telegram');
 const {
   processVehicleEvent,
@@ -270,6 +270,9 @@ async function bootstrap() {
   // Tu dong don dep xe ket moi ngay luc 5h sang
   scheduleStaleCleanup();
 
+  // Tu dong dong xe qua 72h moi gio
+  scheduleAutoClose();
+
   // Tu dong kiem tra va heal webhook moi 30 phut
   scheduleWebhookCheck();
 }
@@ -329,6 +332,56 @@ function scheduleStaleCleanup() {
   }, 60 * 1000);
 
   logger.info(`Stale vehicle cleanup scheduled at 05:00 (>${STALE_DAYS} days)`);
+}
+
+function scheduleAutoClose() {
+  const CLOSE_HOURS = 72;
+  let lastCloseHour = -1;
+
+  setInterval(async () => {
+    try {
+      const { DateTime } = require('luxon');
+      const now = DateTime.now().setZone(config.timezone);
+      const currentHour = now.hour;
+
+      // Run once per hour (not on the same hour twice)
+      if (currentHour === lastCloseHour) return;
+      lastCloseHour = currentHour;
+
+      const cutoff = now.minus({ hours: CLOSE_HOURS }).toISO();
+      const nowIso = new Date().toISOString();
+      const closedVehicles = await autoCloseVehicles(cutoff, nowIso);
+
+      if (closedVehicles.length > 0) {
+        logger.info(`Auto-close: ${closedVehicles.length} vehicles closed (>${CLOSE_HOURS}h)`);
+
+        // Send summary message to managers
+        const managerChatIds = config.manager.chatIds;
+        if (managerChatIds.length > 0) {
+          let msg = `🔄 Tự động đóng ${closedVehicles.length} xe quá ${CLOSE_HOURS}h:\n`;
+          for (const v of closedVehicles.slice(0, 10)) {
+            msg += `• ${v.plate} (vào ${v.timeIn})\n`;
+          }
+          if (closedVehicles.length > 10) {
+            msg += `... và ${closedVehicles.length - 10} xe khác\n`;
+          }
+          msg += `Sai? Gõ RA {biển số} để mở lại.`;
+
+          for (const chatId of managerChatIds) {
+            try {
+              await sendMessage(chatId, msg);
+            } catch (err) {
+              logger.error('Failed to send auto-close summary to manager', { chatId, error: err.message });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.error('Scheduled auto-close failed', { error: err.message });
+    }
+  }, 60 * 1000);
+
+  logger.info(`Auto-close scheduled to run every hour (>${CLOSE_HOURS}h vehicles)`);
 }
 
 // ──────────────────────────────────────────────

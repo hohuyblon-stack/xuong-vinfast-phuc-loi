@@ -23,7 +23,7 @@ async function processVehicleEvent(event, config) {
   const vehicleId = utils.generateVehicleId(tz);
 
   const { messageId, senderId, senderName, imageUrl, ocrResult } = event;
-  const plate        = ocrResult.plateText;
+  let plate          = ocrResult.plateText;
   const confidence   = ocrResult.confidence;
   const vehicleModel = ocrResult.vehicleModel || '';
   const confLabel    = utils.confidenceLabel(confidence, config.ocr);
@@ -114,6 +114,18 @@ async function processVehicleEvent(event, config) {
     };
   }
 
+  // ── Step 2b: Fuzzy plate matching ──────────────────────────────────────────
+  // If this plate isn't in the workshop but a similar one is, use the similar one.
+  const workshopVehicles = await db.getAllInWorkshop(tz);
+  const workshopPlates = workshopVehicles.map(v => v.plate);
+  if (!workshopPlates.includes(plate)) {
+    const similarPlate = utils.findSimilarPlate(plate, workshopPlates);
+    if (similarPlate) {
+      logger.info('Fuzzy plate match applied', { original: plate, matched: similarPlate });
+      plate = similarPlate;
+    }
+  }
+
   // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
 
   const minWorkshopSecs = config.alerts.minWorkshopMinutes * 60;
@@ -177,16 +189,13 @@ async function processVehicleEvent(event, config) {
     await db.updateEventResult(eventId, 'Chua du thoi gian - bo qua RA');
     sheetsSync.syncLogResult(eventId, 'Chua du thoi gian - bo qua RA');
 
-    const timeInFormatted = fmtIso(decision.time_in_ts, tz);
     logger.info('RA rejected - vehicle just entered', {
       plate, secondsInWorkshop: Math.round(decision.seconds_in),
       minWorkshopMinutes: config.alerts.minWorkshopMinutes,
     });
     return {
       success: false,
-      replyMessage:
-        `Cảm ơn! ⏳ Xe ${plate} mới vào lúc ${timeInFormatted}, chưa đủ ${config.alerts.minWorkshopMinutes} phút.\n` +
-        `Hệ thống chưa ghi RA. Vui lòng gửi lại ảnh sau.`,
+      replyMessage: `✅ Đã nhận ảnh xe ${plate}. Xe đang được theo dõi trong xưởng.`,
       eventId,
     };
   }

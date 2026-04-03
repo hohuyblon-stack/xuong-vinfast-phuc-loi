@@ -185,6 +185,32 @@ async function expireStaleVehicles(cutoffIso, nowIso) {
 }
 
 /**
+ * Auto-close vehicles that have been in workshop for more than 72 hours.
+ * Returns array of closed vehicles with formatted time_in.
+ */
+async function autoCloseVehicles(cutoffIso, nowIso) {
+  const zone = appTimezone;
+  const { data, error } = await supabase
+    .from('vehicles')
+    .update({
+      status: 'Đã ra xưởng',
+      note: 'Tự động đóng — quá 72h không có ảnh ra',
+      time_out: nowIso,
+      updated_at: nowIso,
+    })
+    .eq('status', 'Đang trong xưởng')
+    .lt('time_in', cutoffIso)
+    .select('vehicle_id, plate, time_in');
+
+  if (error) throw new Error(`autoCloseVehicles failed: ${error.message}`);
+  return (data || []).map(v => ({
+    vehicleId: v.vehicle_id,
+    plate: v.plate,
+    timeIn: fmtTs(v.time_in, zone),
+  }));
+}
+
+/**
  * Force-exit 1 xe theo vehicleId.
  */
 async function forceExitVehicle(vehicleId, nowIso) {
@@ -807,6 +833,7 @@ module.exports = {
   testConnection,
   forceExitByPlate,
   expireStaleVehicles,
+  autoCloseVehicles,
   forceExitVehicle,
   countInWorkshop,
   // Intelligence queries (smart report)

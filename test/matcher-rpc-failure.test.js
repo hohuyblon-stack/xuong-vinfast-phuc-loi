@@ -43,6 +43,7 @@ const dbStub = {
   insertEvent:      async () => {},
   updateEventResult: async (_id, result) => { dbStub._updatedResult = result; },
   insertReview:     async () => {},
+  getAllInWorkshop: async () => [],
 };
 require.cache[require.resolve('../src/db')] = { exports: dbStub };
 
@@ -69,6 +70,7 @@ require.cache[require.resolve('../src/utils')] = {
     formatDuration:     (m) => `${m} phut`,
     hoursSince:         () => 1,
     formatHours:        () => '1h',
+    findSimilarPlate:   () => null,
   },
 };
 

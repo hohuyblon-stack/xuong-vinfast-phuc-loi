@@ -423,7 +423,7 @@ describe('matcher.processVehicleEvent - RA_DUPLICATE', () => {
     };
     const result = await matcher.processVehicleEvent(event, config);
     assert.equal(result.success, false);
-    assert.ok(result.replyMessage.includes('chưa đủ'));
+    assert.ok(result.replyMessage.includes('Đã nhận ảnh xe'));
   });
 });
 
