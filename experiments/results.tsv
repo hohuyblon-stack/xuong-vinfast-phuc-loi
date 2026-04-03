@@ -1,2 +1,7 @@
 experiment	commit	metric_value	baseline_delta	status	description
 0	baseline	102.41	+0.00	keep	baseline: 75.61% coverage, 268 tests
+1	81df2e0	109.33	+6.92	keep	utils smart formatter tests (75.61% → 79.43%)
+2	9efe66a	110.59	+8.18	keep	computeMorningPriorities tests (79.43% → 80.19%)
+3	ad5a686	117.95	+15.54	keep	db.js query function tests (80.19% → 84.35%)
+4	a2a38e8	121.70	+19.29	keep	matcher handler tests (84.35% → 86.60%)
+5	6d3acdf	124.42	+22.01	keep	productivity/full/morning report tests (86.60% → 88.82%)

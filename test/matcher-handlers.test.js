@@ -428,6 +428,68 @@ describe('matcher.processVehicleEvent - RA_DUPLICATE', () => {
 });
 
 // ──────────────────────────────────────────────
+// checkTimeAlerts — priority change path
+// ──────────────────────────────────────────────
+
+describe('matcher.checkTimeAlerts - priority changes', () => {
+  it('updates priority for vehicles exceeding thresholds', async () => {
+    let priorityUpdated = false;
+    dbMock.updateVehiclePriority = async () => { priorityUpdated = true; };
+    dbMock._inWorkshop = [
+      {
+        plate: '30A-OLD',
+        timeIn: DateTime.now().setZone('Asia/Ho_Chi_Minh').minus({ hours: 50 }).toFormat('dd/MM/yyyy HH:mm:ss'),
+        priority: 'Bình thường',
+        vehicleId: 'LX-OLD',
+      },
+    ];
+    const updated = await matcher.checkTimeAlerts(config);
+    assert.ok(updated > 0);
+    assert.ok(priorityUpdated);
+  });
+
+  it('upgrades to warning when between 24-48h', async () => {
+    let newPriority = null;
+    dbMock.updateVehiclePriority = async (_id, p) => { newPriority = p; };
+    dbMock._inWorkshop = [
+      {
+        plate: '30A-WARN',
+        timeIn: DateTime.now().setZone('Asia/Ho_Chi_Minh').minus({ hours: 30 }).toFormat('dd/MM/yyyy HH:mm:ss'),
+        priority: 'Bình thường',
+        vehicleId: 'LX-WARN',
+      },
+    ];
+    await matcher.checkTimeAlerts(config);
+    assert.equal(newPriority, 'Cảnh báo');
+  });
+});
+
+// ──────────────────────────────────────────────
+// handleProductivityReport — with workshop vehicles
+// ──────────────────────────────────────────────
+
+describe('matcher.handleProductivityReport - workshop vehicles', () => {
+  it('includes workshop summary when vehicles present', async () => {
+    dbMock._productivityData = {
+      today: '03/04/2026', yesterday: '02/04/2026',
+      todayIn: 10, todayOut: 8, inWorkshop: 3,
+      warningCount: 0, urgentCount: 0, pendingReview: 0,
+      completedCount: 8, avgDuration: 300,
+      fastestVehicle: null, slowestVehicle: null,
+      yesterdayIn: 8, yesterdayOut: 6, yesterdayAvgDuration: 0,
+      completionRate: 80,
+      timeSlots: { sang: 5, chieu: 5, toi: 0, dem: 0 },
+    };
+    dbMock._inWorkshop = [
+      { plate: '30A-111', timeIn: '03/04/2026 08:00:00', priority: 'Bình thường', vehicleModel: '' },
+      { plate: '30A-222', timeIn: '02/04/2026 08:00:00', priority: 'Cảnh báo', vehicleModel: '' },
+    ];
+    const result = await matcher.handleProductivityReport(config);
+    assert.ok(result.replyMessage.includes('30A'));
+  });
+});
+
+// ──────────────────────────────────────────────
 // processVehicleEvent — RPC failure
 // ──────────────────────────────────────────────
 
