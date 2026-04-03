@@ -322,6 +322,64 @@ describe('generateChecklist', () => {
 });
 
 // ──────────────────────────────────────────────
+// computeMorningPriorities
+// ──────────────────────────────────────────────
+
+describe('computeMorningPriorities', () => {
+  it('includes urgent vehicles as top priority', () => {
+    const r = computeMorningPriorities({
+      urgentVehicles: [{ plate: '30A-111' }, { plate: '30A-222' }],
+      approaching48h: [],
+      capacityForecast: { utilizationPct: 40, recommendation: '✅ THOẢI MÁI' },
+    });
+    assert.ok(r.length >= 2);
+    assert.equal(r[0].rank, 1);
+    assert.ok(r[0].text.includes('2 xe Khẩn'));
+  });
+
+  it('includes approaching 48h as priority', () => {
+    const r = computeMorningPriorities({
+      urgentVehicles: [],
+      approaching48h: [{ plate: '51F-333', hoursUntil: 4 }],
+      capacityForecast: { utilizationPct: 40, recommendation: '✅ THOẢI MÁI' },
+    });
+    assert.ok(r.some(p => p.text.includes('51F-333')));
+  });
+
+  it('always includes capacity recommendation', () => {
+    const r = computeMorningPriorities({
+      urgentVehicles: [],
+      approaching48h: [],
+      capacityForecast: { utilizationPct: 80, recommendation: '⚠️ Khá đông — theo dõi capacity' },
+    });
+    assert.ok(r.some(p => p.text.includes('hạn chế nhận xe')));
+  });
+
+  it('says normal intake when utilization low', () => {
+    const r = computeMorningPriorities({
+      urgentVehicles: [],
+      approaching48h: [],
+      capacityForecast: { utilizationPct: 30, recommendation: '✅ THOẢI MÁI' },
+    });
+    assert.ok(r.some(p => p.text.includes('nhận xe bình thường')));
+  });
+
+  it('ranks correctly: urgent > approaching48h > capacity', () => {
+    const r = computeMorningPriorities({
+      urgentVehicles: [{ plate: '30A-URG' }],
+      approaching48h: [{ plate: '51F-APP' }],
+      capacityForecast: { utilizationPct: 40, recommendation: '✅ THOẢI MÁI' },
+    });
+    assert.equal(r.length, 3);
+    assert.equal(r[0].rank, 1);
+    assert.ok(r[0].text.includes('Khẩn'));
+    assert.equal(r[1].rank, 2);
+    assert.ok(r[1].text.includes('51F-APP'));
+    assert.equal(r[2].rank, 3);
+  });
+});
+
+// ──────────────────────────────────────────────
 // percentile
 // ──────────────────────────────────────────────
 
