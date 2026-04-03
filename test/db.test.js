@@ -23,26 +23,37 @@ const supabaseMock = {
 
 supabaseMock.rpc = (_name, _args) => Promise.resolve(supabaseMock._rpcResult);
 
+// Chainable query builder mock — every method returns `this` for chaining,
+// then resolves to the configured result when awaited (via .then()).
+function makeChain(result) {
+  const chain = {
+    eq()    { return chain; },
+    neq()   { return chain; },
+    gt()    { return chain; },
+    gte()   { return chain; },
+    lt()    { return chain; },
+    lte()   { return chain; },
+    order() { return chain; },
+    limit() { return chain; },
+    not()   { return chain; },
+    select(){ return chain; },
+    then(resolve, reject) {
+      const r = typeof result === 'function' ? result() : result;
+      return Promise.resolve(r).then(resolve, reject);
+    },
+  };
+  return chain;
+}
+
 supabaseMock.from = (_table) => ({
-  select(_cols) {
-    return {
-      eq(_col, _val) {
-        return {
-          limit(_n)            { return Promise.resolve(supabaseMock._selectResult); },
-          order(_col2, _opts)  { return Promise.resolve(supabaseMock._selectResult); },
-          gte(_col2, _val2)    { return Promise.resolve(supabaseMock._selectResult); },
-        };
-      },
-      gte(_col, _val) { return Promise.resolve(supabaseMock._selectResult); },
-    };
+  select(_cols, _opts) {
+    return makeChain(() => supabaseMock._selectResult);
   },
   insert(_row) {
     return Promise.resolve({ error: supabaseMock._insertError });
   },
   update(_row) {
-    return {
-      eq(_col, _val) { return Promise.resolve({ error: supabaseMock._updateError }); },
-    };
+    return makeChain(() => ({ data: supabaseMock._updateData || null, error: supabaseMock._updateError }));
   },
 });
 
@@ -220,5 +231,304 @@ describe('db.insertReview', () => {
       () => db.insertReview({ errorId: 'ERR-DUP', timestamp: new Date().toISOString() }),
       /insertReview failed/
     );
+  });
+});
+
+// ── testConnection ──────────────────────────────────────────────────────────
+
+describe('db.testConnection', () => {
+  it('resolves when count query succeeds', async () => {
+    supabaseMock._selectResult = { count: 42, error: null };
+    await assert.doesNotReject(() => db.testConnection());
+  });
+
+  it('throws when count query fails', async () => {
+    supabaseMock._selectResult = { count: null, error: { message: 'auth failed' } };
+    await assert.rejects(() => db.testConnection(), /Supabase connection test failed/);
+  });
+});
+
+// ── getAllInWorkshop ─────────────────────────────────────────────────────────
+
+describe('db.getAllInWorkshop', () => {
+  it('returns formatted vehicle list', async () => {
+    supabaseMock._selectResult = {
+      data: [
+        { vehicle_id: 'LX-001', plate: '30A-12345', time_in: '2026-04-03T08:00:00Z', priority: 'Bình thường', note: '', vehicle_model: 'VF 8' },
+      ],
+      error: null,
+    };
+    const result = await db.getAllInWorkshop('Asia/Ho_Chi_Minh');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].plate, '30A-12345');
+    assert.equal(result[0].vehicleModel, 'VF 8');
+    assert.ok(result[0].timeIn.includes('/'));
+  });
+
+  it('returns empty array when no data', async () => {
+    supabaseMock._selectResult = { data: null, error: null };
+    const result = await db.getAllInWorkshop();
+    assert.equal(result.length, 0);
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'timeout' } };
+    await assert.rejects(() => db.getAllInWorkshop(), /getAllInWorkshop failed/);
+  });
+});
+
+// ── countInWorkshop ─────────────────────────────────────────────────────────
+
+describe('db.countInWorkshop', () => {
+  it('returns count', async () => {
+    supabaseMock._selectResult = { count: 55, error: null };
+    const count = await db.countInWorkshop();
+    assert.equal(count, 55);
+  });
+
+  it('returns 0 when count is null', async () => {
+    supabaseMock._selectResult = { count: null, error: null };
+    const count = await db.countInWorkshop();
+    assert.equal(count, 0);
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._selectResult = { count: null, error: { message: 'err' } };
+    await assert.rejects(() => db.countInWorkshop(), /countInWorkshop failed/);
+  });
+});
+
+// ── expireStaleVehicles ─────────────────────────────────────────────────────
+
+describe('db.expireStaleVehicles', () => {
+  it('returns count of expired vehicles', async () => {
+    supabaseMock._updateError = null;
+    supabaseMock._updateData = [{ vehicle_id: 'LX-001' }, { vehicle_id: 'LX-002' }];
+    const count = await db.expireStaleVehicles('2026-03-01T00:00:00Z', '2026-04-03T00:00:00Z');
+    assert.equal(count, 2);
+  });
+
+  it('returns 0 when no vehicles expired', async () => {
+    supabaseMock._updateError = null;
+    supabaseMock._updateData = null;
+    const count = await db.expireStaleVehicles('2026-03-01T00:00:00Z', '2026-04-03T00:00:00Z');
+    assert.equal(count, 0);
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._updateError = { message: 'err' };
+    supabaseMock._updateData = null;
+    await assert.rejects(() => db.expireStaleVehicles('2026-03-01T00:00:00Z', '2026-04-03T00:00:00Z'), /expireStaleVehicles failed/);
+  });
+});
+
+// ── forceExitVehicle ────────────────────────────────────────────────────────
+
+describe('db.forceExitVehicle', () => {
+  it('returns vehicle data on success', async () => {
+    supabaseMock._updateError = null;
+    supabaseMock._updateData = [{ vehicle_id: 'LX-001', plate: '30A-12345' }];
+    const result = await db.forceExitVehicle('LX-001', '2026-04-03T10:00:00Z');
+    assert.equal(result.vehicle_id, 'LX-001');
+  });
+
+  it('returns null when vehicle not found', async () => {
+    supabaseMock._updateError = null;
+    supabaseMock._updateData = [];
+    const result = await db.forceExitVehicle('LX-MISSING', '2026-04-03T10:00:00Z');
+    assert.equal(result, null);
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._updateError = { message: 'err' };
+    supabaseMock._updateData = null;
+    await assert.rejects(() => db.forceExitVehicle('LX-001', '2026-04-03T10:00:00Z'), /forceExitVehicle failed/);
+  });
+});
+
+// ── updateVehiclePriority ───────────────────────────────────────────────────
+
+describe('db.updateVehiclePriority', () => {
+  it('resolves on success', async () => {
+    supabaseMock._updateError = null;
+    await assert.doesNotReject(() => db.updateVehiclePriority('LX-001', 'Khẩn', '2026-04-03T10:00:00Z'));
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._updateError = { message: 'err' };
+    await assert.rejects(() => db.updateVehiclePriority('LX-001', 'Khẩn', '2026-04-03T10:00:00Z'), /updateVehiclePriority failed/);
+  });
+});
+
+// ── getDailySummary ─────────────────────────────────────────────────────────
+
+describe('db.getDailySummary', () => {
+  it('returns summary object', async () => {
+    supabaseMock._selectResult = { data: [], error: null, count: 0 };
+    const result = await db.getDailySummary('Asia/Ho_Chi_Minh');
+    assert.ok(result.today);
+    assert.equal(typeof result.totalIn, 'number');
+    assert.equal(typeof result.totalOut, 'number');
+    assert.equal(typeof result.inWorkshop, 'number');
+  });
+});
+
+// ── getProductivityData ─────────────────────────────────────────────────────
+
+describe('db.getProductivityData', () => {
+  it('returns productivity data', async () => {
+    supabaseMock._selectResult = { data: [], error: null, count: 0 };
+    const result = await db.getProductivityData('Asia/Ho_Chi_Minh');
+    assert.ok(result.today);
+    assert.equal(typeof result.todayIn, 'number');
+    assert.equal(typeof result.completionRate, 'number');
+  });
+});
+
+// ── getFullDailyReport ──────────────────────────────────────────────────────
+
+describe('db.getFullDailyReport', () => {
+  it('returns full report data', async () => {
+    supabaseMock._selectResult = { data: [], error: null, count: 0 };
+    const result = await db.getFullDailyReport('Asia/Ho_Chi_Minh');
+    assert.ok(result.today);
+    assert.ok(Array.isArray(result.vehiclesOut));
+    assert.ok(Array.isArray(result.vehiclesInToday));
+    assert.ok(Array.isArray(result.inWorkshop));
+  });
+});
+
+// ── getWeeklyAverages ───────────────────────────────────────────────────────
+
+describe('db.getWeeklyAverages', () => {
+  it('returns averages', async () => {
+    supabaseMock._selectResult = { data: [], error: null };
+    const result = await db.getWeeklyAverages('Asia/Ho_Chi_Minh');
+    assert.equal(typeof result.avgDailyIn, 'number');
+    assert.equal(typeof result.avgDailyOut, 'number');
+  });
+
+  it('returns zeros on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    const result = await db.getWeeklyAverages('Asia/Ho_Chi_Minh');
+    assert.equal(result.avgDailyIn, 0);
+  });
+});
+
+// ── getInWorkshopWithHours ──────────────────────────────────────────────────
+
+describe('db.getInWorkshopWithHours', () => {
+  it('returns vehicles with hoursIn', async () => {
+    supabaseMock._selectResult = {
+      data: [{ vehicle_id: 'LX-001', plate: '30A-12345', time_in: '2026-04-03T02:00:00Z', priority: 'Bình thường', vehicle_model: '' }],
+      error: null,
+    };
+    const result = await db.getInWorkshopWithHours('Asia/Ho_Chi_Minh');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].plate, '30A-12345');
+    assert.equal(typeof result[0].hoursIn, 'number');
+  });
+
+  it('returns empty on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    const result = await db.getInWorkshopWithHours();
+    assert.equal(result.length, 0);
+  });
+});
+
+// ── getDurationStats ────────────────────────────────────────────────────────
+
+describe('db.getDurationStats', () => {
+  it('returns percentiles', async () => {
+    supabaseMock._selectResult = {
+      data: Array.from({ length: 100 }, (_, i) => ({ duration_minutes: (i + 1) * 10 })),
+      error: null,
+    };
+    const result = await db.getDurationStats('Asia/Ho_Chi_Minh');
+    assert.ok(result.p50 > 0);
+    assert.ok(result.p90 > result.p50);
+    assert.equal(result.count, 100);
+  });
+
+  it('returns zeros for empty data', async () => {
+    supabaseMock._selectResult = { data: [], error: null };
+    const result = await db.getDurationStats();
+    assert.equal(result.p50, 0);
+    assert.equal(result.count, 0);
+  });
+
+  it('returns zeros on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    const result = await db.getDurationStats();
+    assert.equal(result.count, 0);
+  });
+});
+
+// ── getPendingReviews ───────────────────────────────────────────────────────
+
+describe('db.getPendingReviews', () => {
+  it('returns pending reviews', async () => {
+    supabaseMock._selectResult = {
+      data: [{ error_id: 'ERR-001', plate_ai: '30A-111', reason: 'Mờ', timestamp: '2026-04-03T08:00:00Z' }],
+      error: null,
+    };
+    const result = await db.getPendingReviews();
+    assert.equal(result.count, 1);
+    assert.equal(result.items[0].plate, '30A-111');
+  });
+
+  it('returns empty on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    const result = await db.getPendingReviews();
+    assert.equal(result.count, 0);
+  });
+});
+
+// ── getRepeatVisitors ───────────────────────────────────────────────────────
+
+describe('db.getRepeatVisitors', () => {
+  it('returns formatted visitor list', async () => {
+    supabaseMock._selectResult = {
+      data: [
+        { plate: '30A-111', time_in: '2026-04-01T08:00:00Z', time_out: '2026-04-01T14:00:00Z' },
+        { plate: '30A-111', time_in: '2026-04-03T08:00:00Z', time_out: null },
+      ],
+      error: null,
+    };
+    const result = await db.getRepeatVisitors('Asia/Ho_Chi_Minh');
+    assert.equal(result.length, 2);
+    assert.equal(result[0].plate, '30A-111');
+    assert.ok(result[0].timeIn.includes('/'));
+  });
+
+  it('returns empty on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    const result = await db.getRepeatVisitors();
+    assert.equal(result.length, 0);
+  });
+});
+
+// ── getAllMainRows ───────────────────────────────────────────────────────────
+
+describe('db.getAllMainRows', () => {
+  it('returns formatted rows', async () => {
+    supabaseMock._selectResult = {
+      data: [{
+        vehicle_id: 'LX-001', plate: '30A-12345',
+        time_in: '2026-04-03T08:00:00Z', time_out: '2026-04-03T14:00:00Z',
+        duration_minutes: 360, status: 'Đã ra xưởng', priority: 'Bình thường',
+        note: '', vehicle_model: 'VF 8',
+      }],
+      error: null,
+    };
+    const result = await db.getAllMainRows('Asia/Ho_Chi_Minh');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].vehicleModel, 'VF 8');
+    assert.equal(result[0].duration, '360');
+  });
+
+  it('throws on error', async () => {
+    supabaseMock._selectResult = { data: null, error: { message: 'err' } };
+    await assert.rejects(() => db.getAllMainRows(), /getAllMainRows failed/);
   });
 });
