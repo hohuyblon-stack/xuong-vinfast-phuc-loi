@@ -58,6 +58,7 @@ const sheetsMock = {
   syncVehicleOut: () => {},
   syncReviewInsert: () => {},
   syncPrioritiesBatch: () => {},
+  syncDailyReport: () => {},
 };
 
 // ── Mock Telegram ───────────────────────────────────────────────────────────
@@ -213,6 +214,104 @@ describe('matcher.checkTimeAlerts', () => {
     ];
     const updated = await matcher.checkTimeAlerts(config);
     assert.equal(updated, 0);
+  });
+});
+
+// ──────────────────────────────────────────────
+// handleProductivityReport
+// ──────────────────────────────────────────────
+
+describe('matcher.handleProductivityReport', () => {
+  beforeEach(() => {
+    dbMock._productivityData = {
+      today: '03/04/2026', yesterday: '02/04/2026',
+      todayIn: 15, todayOut: 12, inWorkshop: 45,
+      warningCount: 2, urgentCount: 1, pendingReview: 3,
+      completedCount: 12, avgDuration: 300,
+      fastestVehicle: { plate: '30A-FAST', duration: 60 },
+      slowestVehicle: { plate: '30A-SLOW', duration: 720 },
+      yesterdayIn: 10, yesterdayOut: 8, yesterdayAvgDuration: 280,
+      completionRate: 80,
+      timeSlots: { sang: 5, chieu: 7, toi: 3, dem: 0 },
+    };
+    dbMock._inWorkshop = [];
+  });
+
+  it('returns productivity report with all sections', async () => {
+    const result = await matcher.handleProductivityReport(config);
+    assert.ok(result.replyMessage.includes('năng suất'));
+    assert.ok(result.replyMessage.includes('15'));
+    assert.ok(result.replyMessage.includes('So sánh'));
+    assert.ok(result.replyMessage.includes('Thời gian xử lý'));
+    assert.ok(result.replyMessage.includes('Phân bố khung giờ'));
+    assert.ok(result.replyMessage.includes('Cảnh báo'));
+  });
+
+  it('handles zero completed vehicles', async () => {
+    dbMock._productivityData = {
+      ...dbMock._productivityData,
+      completedCount: 0, todayIn: 0, warningCount: 0, urgentCount: 0,
+    };
+    const result = await matcher.handleProductivityReport(config);
+    assert.ok(!result.replyMessage.includes('Thời gian xử lý'));
+  });
+});
+
+// ──────────────────────────────────────────────
+// handleFullReport
+// ──────────────────────────────────────────────
+
+describe('matcher.handleFullReport', () => {
+  beforeEach(() => {
+    dbMock._fullReport = {
+      today: '03/04/2026', yesterday: '02/04/2026',
+      vehiclesOut: [], vehiclesInToday: [], inWorkshop: [],
+      totalIn: 10, totalOut: 8, inWorkshopCount: 45,
+      warningCount: 2, urgentCount: 1, pendingReview: 0,
+      avgDuration: 240, yesterdayIn: 8, yesterdayOut: 7,
+      yesterdayAvgDuration: 220, completionRate: 80,
+      completedCount: 8, fastestVehicle: null, slowestVehicle: null,
+      timeSlots: { sang: 4, chieu: 5, toi: 1, dem: 0 },
+    };
+    dbMock._inWorkshopWithHours = [];
+    dbMock._repeatVisitors = [];
+    dbMock._weeklyAverages = { avgDailyIn: 10, avgDailyOut: 8, avgDuration: 300 };
+    dbMock._durationStats = { p50: 240, p75: 360, p90: 480, count: 100 };
+    dbMock._pendingReviews = { count: 0, items: [] };
+  });
+
+  it('returns array of message parts', async () => {
+    const result = await matcher.handleFullReport(config);
+    assert.ok(Array.isArray(result.replyMessages));
+    assert.ok(result.replyMessages.length >= 1);
+    assert.ok(result.replyMessages[0].includes('BÁO CÁO CUỐI NGÀY'));
+  });
+
+  it('includes checklist section', async () => {
+    const result = await matcher.handleFullReport(config);
+    const allText = result.replyMessages.join('\n');
+    assert.ok(allText.includes('CHECKLIST'));
+  });
+});
+
+// ──────────────────────────────────────────────
+// handleMorningBriefing
+// ──────────────────────────────────────────────
+
+describe('matcher.handleMorningBriefing', () => {
+  beforeEach(() => {
+    dbMock._inWorkshopWithHours = [
+      { plate: '30A-111', hoursIn: 10, timeIn: '03/04/2026 06:00:00', priority: 'Bình thường', vehicleModel: '' },
+    ];
+    dbMock._weeklyAverages = { avgDailyIn: 10, avgDailyOut: 8, avgDuration: 300 };
+  });
+
+  it('returns morning briefing message', async () => {
+    const result = await matcher.handleMorningBriefing(config);
+    assert.ok(Array.isArray(result.replyMessages));
+    const allText = result.replyMessages.join('\n');
+    assert.ok(allText.includes('SÁNG NAY'));
+    assert.ok(allText.includes('TỒN KHO'));
   });
 });
 
