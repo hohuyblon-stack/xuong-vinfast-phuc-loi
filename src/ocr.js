@@ -7,7 +7,11 @@ const logger = require('./logger');
 let poeApiKey = null;
 let poeModel = null;
 
-const POE_BASE_URL = 'https://api.poe.com/v1/chat/completions';
+const POE_BASE_URL = process.env.POE_API_ENDPOINT || 'https://api.poe.com/v1/chat/completions';
+
+// Simple in-memory cache: imageUrl -> { result, time }
+const ocrCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const OCR_PROMPT = `Bạn là hệ thống OCR biển số xe Việt Nam. Phân tích ảnh và trích xuất:
 1. Biển số xe Việt Nam (format ví dụ: 30A-12345, 29B1-234.56)
@@ -26,6 +30,7 @@ Nếu không chắc loại xe: để vehicle_model rỗng.`;
 function initOcr(config) {
   poeApiKey = config.apiKey;
   poeModel = config.model || 'GPT-4o-mini';
+  ocrCache.clear();
   logger.info(`Poe OCR initialized with model: ${poeModel}`);
 }
 
@@ -50,6 +55,13 @@ async function recognizePlate(imageUrl) {
     throw new Error('OCR client not initialized. Call initOcr() first.');
   }
 
+  // Check cache first
+  const cached = ocrCache.get(imageUrl);
+  if (cached && Date.now() - cached.time < CACHE_TTL_MS) {
+    logger.info('OCR cache hit', { imageUrl: imageUrl.slice(-30) });
+    return cached.result;
+  }
+
   const result = {
     plateText: '',
     confidence: 0,
@@ -58,36 +70,52 @@ async function recognizePlate(imageUrl) {
     modelConfidence: 0,
   };
 
+  const MAX_RETRIES = 3;
+
   try {
     const imageBuffer = await downloadImage(imageUrl);
     const base64Image = imageBuffer.toString('base64');
     const mimeType = detectMimeType(imageBuffer);
 
-    const response = await axios.post(POE_BASE_URL, {
-      model: poeModel,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: OCR_PROMPT },
+    let response;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        response = await axios.post(POE_BASE_URL, {
+          model: poeModel,
+          messages: [
             {
-              type: 'image_url',
-              image_url: {
-                url: `data:${mimeType};base64,${base64Image}`,
-              },
+              role: 'user',
+              content: [
+                { type: 'text', text: OCR_PROMPT },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64Image}`,
+                  },
+                },
+              ],
             },
           ],
-        },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-    }, {
-      headers: {
-        'Authorization': `Bearer ${poeApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 30000,
-    });
+          temperature: 0,
+          max_tokens: 256,
+        }, {
+          headers: {
+            'Authorization': `Bearer ${poeApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 30000,
+        });
+        break; // success
+      } catch (retryErr) {
+        const status = retryErr.response?.status;
+        if (attempt === MAX_RETRIES || (status && status !== 429 && status !== 500 && status !== 502 && status !== 503)) {
+          throw retryErr;
+        }
+        const delay = 200 * Math.pow(2, attempt - 1); // 200ms, 400ms, 800ms
+        logger.warn(`OCR attempt ${attempt} failed (${status || retryErr.code}), retrying in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
 
     const content = response.data.choices?.[0]?.message?.content || '';
     result.rawTexts = [content];
@@ -124,6 +152,9 @@ async function recognizePlate(imageUrl) {
       imageUrl,
     });
   }
+
+  // Cache the result
+  ocrCache.set(imageUrl, { result, time: Date.now() });
 
   return result;
 }
