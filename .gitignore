@@ -6,3 +6,7 @@ coverage/
 dist/
 db_check_script.js
 scripts/ocr-check.js
+
+# Demo/temp artifacts
+*.html
+!src/**/*.html

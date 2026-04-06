@@ -8,9 +8,7 @@
     "dev": "nodemon src/server.js",
     "test": "node --test 'test/**/*.test.js'",
     "test:coverage": "node --experimental-test-coverage --test 'test/**/*.test.js'",
-    "check-alerts": "node src/scripts/check-alerts.js",
-    "openclaw": "node openclaw/agent.js",
-    "openclaw:check": "OPENCLAW_RUN_ONCE=1 node openclaw/agent.js"
+    "check-alerts": "node src/scripts/check-alerts.js"
   },
   "keywords": [
     "vinfast",
