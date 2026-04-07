@@ -278,6 +278,9 @@ async function bootstrap() {
   // Bot gui prompt 18:05 hoi bao ve check xe nghi ghost (sau daily-report 5p)
   scheduleEveningSweep();
 
+  // AI briefing 2 lan/ngay (8h sang + 18h chieu)
+  scheduleAiBriefing();
+
   // Tu dong don dep xe ket moi ngay luc 5h sang
   scheduleStaleCleanup();
 
@@ -335,6 +338,17 @@ function scheduleStaleCleanup() {
         const expired = await expireStaleVehicles(cutoff, nowIso);
         if (expired > 0) {
           logger.info(`Auto-cleanup: ${expired} stale vehicles expired (>${STALE_DAYS} days)`);
+        }
+        // Also clean up the CẦN KIỂM TRA sheet tab — review rows older than 7 days.
+        // Source of truth is Supabase reviews table; the sheet is just a viewing surface.
+        try {
+          const sheets = require('./sheets');
+          const removed = await sheets.cleanupOldReviewRows(7);
+          if (removed > 0) {
+            logger.info(`Auto-cleanup: ${removed} stale review rows removed from sheet`);
+          }
+        } catch (err) {
+          logger.error('Review rows cleanup failed (non-blocking)', { error: err.message });
         }
       } catch (err) {
         logger.error('Scheduled stale cleanup failed', { error: err.message });
@@ -638,6 +652,52 @@ function scheduleDailyReport() {
 //
 // Reply handling lives in processMessageAsync below — checks sweepSessions
 // before normal parseMessage.
+
+// ──────────────────────────────────────────────
+// AI briefing — 2 lần/ngày (8h sáng + 18h chiều)
+// ──────────────────────────────────────────────
+//
+// Why 2 calls/day not 24:
+//   - Poe API costs ~$0.02/call → $1.20/month at 2x daily
+//   - Quản lý không mở sheet liên tục, briefing stale 12h vẫn đủ ngữ cảnh
+//   - Sheets API write quota 500/day → leave headroom for other writes
+//
+// 8h: morning briefing (after morning-briefing telegram cron at 7h)
+// 18h: end-of-day reflection (after daily-report at 18h, sweep at 18:05)
+// Both run after their telegram counterparts, so the briefing can reflect
+// what just got reported.
+
+function scheduleAiBriefing() {
+  const HOURS = (process.env.AI_BRIEFING_HOURS || '8,18')
+    .split(',')
+    .map(h => parseInt(h.trim(), 10))
+    .filter(h => h >= 0 && h <= 23);
+
+  if (HOURS.length === 0) {
+    logger.info('AI briefing disabled (AI_BRIEFING_HOURS empty)');
+    return;
+  }
+
+  const lastRunByHour = {}; // { hour: 'YYYY-MM-DD' }
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (HOURS.includes(currentHour) && lastRunByHour[currentHour] !== todayStr) {
+      lastRunByHour[currentHour] = todayStr;
+      try {
+        const { refreshAiBriefing } = require('./ai-briefing');
+        await refreshAiBriefing(config);
+      } catch (err) {
+        logger.error('AI briefing run failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`AI briefing scheduled at hours: ${HOURS.join(', ')}`);
+}
 
 function scheduleEveningSweep() {
   const SWEEP_HOUR = parseInt(process.env.SWEEP_HOUR || '18', 10);
