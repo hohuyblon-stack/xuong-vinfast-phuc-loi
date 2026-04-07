@@ -13,8 +13,8 @@ const { DateTime } = require('luxon');
 const {
   getInWorkshopWithHours,
   getTodayActivity,
-  getYesterdayActivity,
   getAllInWorkshop,
+  getWeeklyAverages,
 } = require('./db');
 const sheets = require('./sheets');
 const logger = require('./logger');
@@ -30,10 +30,10 @@ async function refreshDashboard(config) {
   const now = DateTime.now().setZone(tz);
 
   // Parallel queries
-  const [inWorkshop, todayVehicles, yesterdayVehicles] = await Promise.all([
+  const [inWorkshop, todayVehicles, weeklyAvg] = await Promise.all([
     getInWorkshopWithHours(tz),
     getTodayActivity(tz),
-    getYesterdayActivity(tz),
+    getWeeklyAverages(tz, 7),
   ]);
 
   // ── Compute stats ──
@@ -45,19 +45,6 @@ async function refreshDashboard(config) {
   const todayOut = todayVehicles.filter(v => {
     const tOut = v.timeOutISO ? DateTime.fromISO(v.timeOutISO, { zone: tz }) : null;
     return tOut && tOut >= now.startOf('day') && tOut < now.plus({ days: 1 }).startOf('day');
-  }).length;
-
-  const yesterdayStart = now.minus({ days: 1 }).startOf('day');
-  const yesterdayEnd   = now.startOf('day');
-
-  const yesterdayIn = yesterdayVehicles.filter(v => {
-    const tIn = v.timeInISO ? DateTime.fromISO(v.timeInISO, { zone: tz }) : null;
-    return tIn && tIn >= yesterdayStart && tIn < yesterdayEnd;
-  }).length;
-
-  const yesterdayOut = yesterdayVehicles.filter(v => {
-    const tOut = v.timeOutISO ? DateTime.fromISO(v.timeOutISO, { zone: tz }) : null;
-    return tOut && tOut >= yesterdayStart && tOut < yesterdayEnd;
   }).length;
 
   // ── Sort in-workshop by hoursIn descending ──
@@ -75,19 +62,35 @@ async function refreshDashboard(config) {
   const blockPositions = [];
   let currentRow = 0;
 
-  // Block 1: TÌNH HÌNH XƯỞNG
-  const summaryTitle = `TÌNH HÌNH XƯỞNG (cập nhật lúc ${now.toFormat('HH:mm dd/MM/yyyy')})`;
-  const summaryRows = [
-    [summaryTitle, ''],
-    ['Tổng xe đang trong xưởng:', String(inWorkshop.length)],
-    ['Xe vào hôm nay:', String(todayIn)],
-    ['Xe ra hôm nay:', String(todayOut)],
-    ['Xe vào hôm qua:', String(yesterdayIn)],
-    ['Xe ra hôm qua:', String(yesterdayOut)],
+  // ── Block 1: HERO — answers "tình hình hôm nay ra sao?" in 3 seconds ──
+  // - Verdict in title (✅ ỔN / ⚠️ CẦN CHÚ Ý / 🔴 CÓ VẤN ĐỀ) so quản lý glance once
+  // - "Đang sửa" excludes ghost vehicles (>48h chưa chụp ra) — separates real from suspect
+  // - Comparison with weekly average gives context (12 vs TB 10 = above average)
+  let verdict = '✅ ỔN';
+  if (urgentVehicles.length > 0) verdict = '🔴 CÓ VẤN ĐỀ';
+  else if (warningVehicles.length > 0) verdict = '⚠️ CẦN CHÚ Ý';
+
+  const activelyRepairing = sortedWorkshop.filter(v => v.hoursIn < urgentThreshold).length;
+  const ghostCount = urgentVehicles.length;
+
+  const heroTitle = `HÔM NAY ${now.toFormat('dd/MM/yyyy')}  —  ${verdict}  —  cập nhật ${now.toFormat('HH:mm')}`;
+  const heroRows = [
+    [heroTitle, ''],
+    ['Vào hôm nay:', `${todayIn}    (TB tuần: ${weeklyAvg.avgDailyIn})`],
+    ['Ra hôm nay:',  `${todayOut}    (TB tuần: ${weeklyAvg.avgDailyOut})`],
+    ['Đang sửa (≤48h):', String(activelyRepairing)],
   ];
-  blocks.push(...summaryRows);
-  blockPositions.push({ type: 'summary', startRow: currentRow, endRow: currentRow + summaryRows.length });
-  currentRow += summaryRows.length;
+
+  if (ghostCount > 0) {
+    heroRows.push([
+      `⚠️ ${ghostCount} xe quá ${urgentThreshold}h:`,
+      `có thể đã ra (bảo vệ quên chụp). Bot sẽ hỏi bảo vệ lúc 18h.`,
+    ]);
+  }
+
+  blocks.push(...heroRows);
+  blockPositions.push({ type: 'summary', startRow: currentRow, endRow: currentRow + heroRows.length });
+  currentRow += heroRows.length;
 
   // Blank row
   blocks.push(['', '']);
@@ -217,10 +220,14 @@ async function refreshDashboard(config) {
   await rewriteMainTab(config);
 
   logger.info('Dashboard refreshed', {
-    inWorkshop: inWorkshop.length,
+    verdict,
     todayIn,
     todayOut,
-    alerts: urgentVehicles.length + warningVehicles.length,
+    activelyRepairing,
+    ghostCount,
+    weeklyAvgIn: weeklyAvg.avgDailyIn,
+    weeklyAvgOut: weeklyAvg.avgDailyOut,
+    inWorkshopTotal: inWorkshop.length,
   });
 }
 

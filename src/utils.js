@@ -146,6 +146,36 @@ function parseMessage(text) {
   return { action, params: '' };
 }
 
+/**
+ * Parse evening sweep reply (vehicle indices the security guard reports as exited).
+ *
+ * Strict format: text must contain only digits, spaces, commas, dots, semicolons.
+ * Examples that match: "1 3 5", "1,3,5", "1, 3, 5", "135" → [1,3,5] / [135]
+ * Examples that DO NOT match: "30A-12345" (letters), "ra 1 3" (letters), "" (empty)
+ *
+ * Returns array of unique positive integers, or null if not a sweep reply format.
+ */
+function parseSweepReply(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  // Only digits and common separators allowed
+  if (!/^[\d\s,;.]+$/.test(trimmed)) return null;
+  const matches = trimmed.match(/\d+/g);
+  if (!matches || matches.length === 0) return null;
+  // Dedup, parse, drop zeros
+  const seen = new Set();
+  const out = [];
+  for (const m of matches) {
+    const n = parseInt(m, 10);
+    if (n > 0 && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
 // ──────────────────────────────────────────────
 // Report formatting helpers
 // ──────────────────────────────────────────────
@@ -585,6 +615,7 @@ module.exports = {
   normalizePlate,
   isValidVietnamPlate,
   parseMessage,
+  parseSweepReply,
   confidenceLabel,
   TEXT_ONLY_ACTIONS,
   formatVehicleCompleted,

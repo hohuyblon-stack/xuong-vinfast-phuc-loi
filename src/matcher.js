@@ -851,6 +851,194 @@ async function handleManualExit(plate, senderName, config) {
 // BAO CAO KE TOAN
 // ──────────────────────────────────────────────
 
+// ──────────────────────────────────────────────
+// EVENING SWEEP — fix ghost vehicles via human-in-the-loop
+// ──────────────────────────────────────────────
+//
+// Why this exists:
+// Bảo vệ luôn chụp ảnh xe VÀO nhưng hay quên chụp xe RA → DB tích lũy "ghost
+// vehicles" → "Đang trong xưởng" hiển thị nhiều hơn thực tế. Auto-close >72h
+// chỉ xử lý sau 3 ngày.
+//
+// Solution: tận dụng workflow có sẵn (bảo vệ chiều đi vòng kiểm tra thủ công).
+// Mỗi 18h bot push danh sách xe nghi ngờ (>warningHours, mặc định 24h) vào
+// nhóm Telegram. Bảo vệ đi vòng → reply số xe đã ra (vd "1 3 5") → bot tự
+// đóng. Mặc định "không reply" = vẫn còn (an toàn, không đóng nhầm).
+//
+// Session state: lưu in-memory Map (chatId → session) ở server.js, expire
+// sau 4h. Render starter plan không sleep nên session sống đủ lâu.
+
+/**
+ * Build evening sweep prompt and send to manager chats.
+ * Stores session state for each chat so subsequent digit replies can be parsed.
+ *
+ * @param {Object} config - app config
+ * @param {Map} sweepSessions - in-memory store, keyed by chatId
+ * @param {Function} sendMessageFn - telegram send function (injected for testability)
+ */
+async function sendEveningSweepPrompt(config, sweepSessions, sendMessageFn) {
+  const tz = config.timezone;
+  const warningHours = config.alerts?.warningHours || 24;
+  const managerChatIds = config.manager.chatIds;
+  const todayStr = DateTime.now().setZone(tz).toFormat('yyyy-MM-dd');
+
+  if (!managerChatIds || managerChatIds.length === 0) {
+    logger.info('Evening sweep skipped — no manager chat IDs configured');
+    return { sent: 0, suspect: 0 };
+  }
+
+  // Find suspect vehicles (>warningHours, sorted oldest first so guard sees worst cases at top)
+  const allInWorkshop = await db.getInWorkshopWithHours(tz);
+  const suspect = allInWorkshop
+    .filter(v => v.hoursIn >= warningHours)
+    .sort((a, b) => b.hoursIn - a.hoursIn);
+
+  let messageText;
+  if (suspect.length === 0) {
+    messageText =
+      `✅ ${DateTime.now().setZone(tz).toFormat('HH:mm dd/MM')} — Không có xe nghi đã ra.\n` +
+      `Tất cả xe trong xưởng đều mới (≤${warningHours}h). Cảm ơn các anh đã chụp đầy đủ!`;
+  } else {
+    const lines = suspect.map((v, i) => {
+      const idx = (i + 1).toString().padStart(2, ' ');
+      const hours = `${Math.round(v.hoursIn)}h`.padStart(4, ' ');
+      const model = v.vehicleModel || '—';
+      return `${idx}.  ${v.plate}  (${model}, ${hours})`;
+    });
+
+    messageText =
+      `🔍 Anh đi vòng giúp em check ${suspect.length} xe nghi đã ra:\n\n` +
+      lines.join('\n') + '\n\n' +
+      `Reply số xe ĐÃ RA, vd: 1 3 5\n` +
+      `(không trả lời = vẫn còn trong xưởng — không bị đóng)`;
+  }
+
+  // Send to each manager chat + create session (for non-empty lists only)
+  let sent = 0;
+  for (const chatId of managerChatIds) {
+    try {
+      await sendMessageFn(chatId, messageText);
+      sent++;
+
+      if (suspect.length > 0) {
+        sweepSessions.set(String(chatId), {
+          date: todayStr,
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 4 * 60 * 60 * 1000, // 4h window
+          vehicles: suspect.map(v => ({
+            vehicleId: v.vehicleId,
+            plate: v.plate,
+            vehicleModel: v.vehicleModel,
+            hoursIn: v.hoursIn,
+          })),
+        });
+      } else {
+        // Clear any stale session for this chat
+        sweepSessions.delete(String(chatId));
+      }
+    } catch (err) {
+      logger.error('Evening sweep send failed', { chatId, error: err.message });
+    }
+  }
+
+  logger.info('Evening sweep prompt sent', { sent, suspect: suspect.length });
+  return { sent, suspect: suspect.length };
+}
+
+/**
+ * Process a sweep reply (e.g. "1 3 5") for a given chat.
+ *
+ * @param {number[]} indices - parsed 1-based indices
+ * @param {string|number} chatId
+ * @param {Map} sweepSessions
+ * @param {string} senderName
+ * @param {Object} config
+ * @returns {Promise<{replyMessage: string}>}
+ */
+async function processSweepReply(indices, chatId, sweepSessions, senderName, config) {
+  const session = sweepSessions.get(String(chatId));
+  if (!session) {
+    return null; // not in sweep mode → caller falls through to normal parsing
+  }
+
+  // Expire check
+  if (Date.now() > session.expiresAt) {
+    sweepSessions.delete(String(chatId));
+    return null;
+  }
+
+  const max = session.vehicles.length;
+  const valid = indices.filter(i => i >= 1 && i <= max);
+  const invalid = indices.filter(i => i < 1 || i > max);
+
+  if (valid.length === 0) {
+    return {
+      replyMessage:
+        `⚠️ Số ${invalid.join(', ')} không có trong danh sách (chỉ có 1-${max}).\n` +
+        `Reply lại số xe ĐÃ RA, vd: 1 3 5`,
+    };
+  }
+
+  // Force-exit each selected vehicle
+  const nowIso = new Date().toISOString();
+  const closed = [];
+  const failed = [];
+
+  for (const i of valid) {
+    const v = session.vehicles[i - 1];
+    try {
+      const result = await db.forceExitVehicle(v.vehicleId, nowIso);
+      if (result) {
+        closed.push(`${i}. ${v.plate}`);
+        // Sync to Sheets
+        const nowFmt = utils.nowFormatted(config.timezone);
+        sheetsSync.syncVehicleOut(v.plate, v.vehicleId, {
+          timeOut: nowFmt,
+          duration: '',
+          status: 'Đã ra xưởng',
+          note: `Sweep 18h — ${senderName}`,
+          updatedAt: nowFmt,
+        });
+      } else {
+        failed.push(`${i}. ${v.plate} (đã được đóng trước đó)`);
+      }
+    } catch (err) {
+      logger.error('Sweep force-exit failed', { plate: v.plate, error: err.message });
+      failed.push(`${i}. ${v.plate} (lỗi: ${err.message})`);
+    }
+  }
+
+  // Mark these indices as processed so re-replies don't double-process
+  const remaining = session.vehicles.filter((_, idx) => !valid.includes(idx + 1));
+  if (remaining.length === 0) {
+    sweepSessions.delete(String(chatId));
+  } else {
+    session.vehicles = remaining;
+    // NOTE: indices in the new session are RE-NUMBERED. If user replies again,
+    // they'll be reading from the original list. We accept this trade-off:
+    // most replies are 1 batch. For multi-batch, send a fresh prompt.
+    sweepSessions.delete(String(chatId)); // safer: force fresh prompt for next round
+  }
+
+  let reply = `✅ Đã đóng ${closed.length} xe:\n${closed.join('\n')}`;
+  if (failed.length > 0) {
+    reply += `\n\n⚠️ Không đóng được:\n${failed.join('\n')}`;
+  }
+  if (invalid.length > 0) {
+    reply += `\n\nℹ️ Số ${invalid.join(', ')} không có trong list, đã bỏ qua.`;
+  }
+  reply += `\n\nGhi nhận bởi: ${senderName}`;
+
+  logger.info('Sweep reply processed', {
+    chatId,
+    closed: closed.length,
+    failed: failed.length,
+    invalid: invalid.length,
+  });
+
+  return { replyMessage: reply };
+}
+
 async function handleAccountingReport(fileUrl, config) {
   const { downloadAndParseExcel } = require('./excel');
   const { generateAccountingReport } = require('./accounting');
@@ -888,4 +1076,6 @@ module.exports = {
   sendScheduledMorningBriefing,
   handleManualExit,
   sendEndOfDayReminder,
+  sendEveningSweepPrompt,
+  processSweepReply,
 };
