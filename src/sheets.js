@@ -102,6 +102,7 @@ async function ensureTabs() {
     { key: 'completed', name: tabNames.completed, columns: COLUMNS.completed },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
+    { key: 'dashboard', name: 'TỔNG QUAN', columns: null }, // no header — fully managed by dashboard
   ];
 
   const addRequests = [];
@@ -122,6 +123,7 @@ async function ensureTabs() {
   }
 
   for (const tab of tabConfigs) {
+    if (!tab.columns) continue; // dashboard tab has no fixed header
     const range = `'${tab.name}'!A1:${colLetter(tab.columns.length)}1`;
     const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
     if (!res.data.values || res.data.values.length === 0) {
@@ -448,6 +450,125 @@ async function getSheetIdByName(name) {
 }
 
 // ──────────────────────────────────────────────
+// TỔNG QUAN (Dashboard tab — full rewrite each time)
+// ──────────────────────────────────────────────
+
+/**
+ * Write the dashboard tab. Clears all content, writes blocks, applies formatting.
+ * Moves tab to index 0 (first position).
+ *
+ * @param {string} tabName - Tab name (TỔNG QUAN)
+ * @param {Array<Array<string>>} rows - All rows to write (flat array of row arrays)
+ * @param {Array<{type: string, startRow: number, endRow: number, level?: string, columns?: number}>} blockPositions
+ */
+async function writeDashboardTab(tabName, rows, blockPositions) {
+  // 1. Get or create tab
+  const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const existing = spreadsheet.data.sheets;
+  let sheetId = null;
+  let currentIndex = -1;
+
+  for (const s of existing) {
+    if (s.properties.title === tabName) {
+      sheetId = s.properties.sheetId;
+      currentIndex = s.properties.index;
+      break;
+    }
+  }
+
+  if (sheetId == null) {
+    const addRes = await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: tabName } } }],
+      },
+    });
+    sheetId = addRes.data.replies[0].addSheet.properties.sheetId;
+    logger.info(`Created dashboard tab: "${tabName}"`);
+  }
+
+  // 2. Clear entire tab
+  await sheetsApi.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `'${tabName}'`,
+  });
+
+  // 3. Determine max columns across all rows
+  const maxCols = Math.max(...rows.map(r => r.length), 2);
+  const endCol = colLetter(maxCols);
+
+  // 4. Write all rows at once
+  if (rows.length > 0) {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${tabName}'!A1:${endCol}${rows.length}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: rows },
+    });
+  }
+
+  // 5. Apply formatting + move tab to index 0
+  try {
+    const { buildDashboardFormatting } = require('./sheets-format');
+    const formatRequests = buildDashboardFormatting(sheetId, blockPositions, rows.length, maxCols);
+
+    // Move tab to first position
+    if (currentIndex !== 0) {
+      formatRequests.push({
+        updateSheetProperties: {
+          properties: { sheetId, index: 0 },
+          fields: 'index',
+        },
+      });
+    }
+
+    if (formatRequests.length > 0) {
+      await sheetsApi.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: formatRequests },
+      });
+    }
+  } catch (err) {
+    logger.error('Dashboard formatting failed (non-blocking)', { error: err.message });
+  }
+
+  logger.info('Dashboard tab written', { tabName, rows: rows.length });
+}
+
+/**
+ * Rewrite the main tab (ĐANG TRONG XƯỞNG) as a sorted snapshot.
+ * Keeps header row (row 1), clears data rows (row 2+), writes sorted data.
+ *
+ * @param {Array<Array<string>>} rows - Data rows (without header)
+ */
+async function rewriteMainTab(rows) {
+  const mainTabName = tabNames.main;
+
+  // Clear data rows (keep header at row 1)
+  try {
+    await sheetsApi.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${mainTabName}'!A2:K`,
+    });
+  } catch (err) {
+    // Tab might be empty — that's fine
+    logger.warn('Clear main tab data rows failed (non-blocking)', { error: err.message });
+  }
+
+  if (rows.length === 0) return;
+
+  // Write sorted data starting at row 2
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${mainTabName}'!A2:K${rows.length + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+
+  logger.info('Main tab rewritten as snapshot', { rows: rows.length });
+}
+
+// ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
 
@@ -471,4 +592,6 @@ module.exports = {
   archiveCompletedVehicle,
   deleteMainRow,
   getSheetIdByName,
+  writeDashboardTab,
+  rewriteMainTab,
 };

@@ -347,4 +347,211 @@ function gridRange(sheetId, startRow, endRow, startCol, endCol) {
   return { sheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol };
 }
 
-module.exports = { buildDailyReportFormatting, buildMainSheetFormatting };
+// ──────────────────────────────────────────────
+// Dashboard tab (TỔNG QUAN) formatting
+// ──────────────────────────────────────────────
+
+/**
+ * Build formatting requests for the dashboard tab.
+ *
+ * @param {number} sheetId
+ * @param {Array<{type: string, startRow: number, endRow: number, level?: string, columns?: number}>} blockPositions
+ * @param {number} totalRows
+ * @param {number} totalCols
+ * @returns {Array} Sheets API formatting requests
+ */
+function buildDashboardFormatting(sheetId, blockPositions, totalRows, totalCols) {
+  const requests = [];
+
+  // 1. Global font defaults
+  requests.push({
+    repeatCell: {
+      range: gridRange(sheetId, 0, totalRows, 0, totalCols),
+      cell: {
+        userEnteredFormat: {
+          textFormat: {
+            fontFamily: FONT_FAMILY,
+            fontSize: 10,
+            foregroundColor: COLORS.text,
+          },
+          verticalAlignment: 'MIDDLE',
+          wrapStrategy: 'CLIP',
+        },
+      },
+      fields: 'userEnteredFormat(textFormat,verticalAlignment,wrapStrategy)',
+    },
+  });
+
+  // 2. Column widths: A=220px, B=150px, C-F=120px
+  const dashWidths = [220, 150, 120, 120, 120, 150];
+  for (let i = 0; i < Math.min(dashWidths.length, totalCols); i++) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+        properties: { pixelSize: dashWidths[i] },
+        fields: 'pixelSize',
+      },
+    });
+  }
+
+  // 3. Process each block
+  for (const block of blockPositions) {
+    if (block.type === 'summary') {
+      // Header row: bold, blue background, white text, font 12, merge A-B
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, totalCols),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLORS.primary,
+              textFormat: {
+                fontFamily: FONT_FAMILY,
+                fontSize: 12,
+                bold: true,
+                foregroundColor: COLORS.white,
+              },
+              horizontalAlignment: 'LEFT',
+              verticalAlignment: 'MIDDLE',
+              padding: { left: 8 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,padding)',
+        },
+      });
+      // Merge header cells across all columns
+      requests.push({
+        mergeCells: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, totalCols),
+          mergeType: 'MERGE_ALL',
+        },
+      });
+      // Bold labels (col A), right-align values (col B)
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 0, 1),
+          cell: {
+            userEnteredFormat: {
+              textFormat: { fontFamily: FONT_FAMILY, fontSize: 11, bold: true, foregroundColor: COLORS.text },
+              padding: { left: 12 },
+            },
+          },
+          fields: 'userEnteredFormat(textFormat,padding)',
+        },
+      });
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 1, 2),
+          cell: {
+            userEnteredFormat: {
+              textFormat: { fontFamily: FONT_FAMILY, fontSize: 11, bold: true, foregroundColor: COLORS.primary },
+              horizontalAlignment: 'LEFT',
+            },
+          },
+          fields: 'userEnteredFormat(textFormat,horizontalAlignment)',
+        },
+      });
+      // Light surface background for summary data rows
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 0, totalCols),
+          cell: { userEnteredFormat: { backgroundColor: COLORS.surface } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      });
+    }
+
+    if (block.type === 'alert') {
+      const bgColor = block.level === 'urgent' ? COLORS.urgent : COLORS.warning;
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow, block.endRow, 0, totalCols),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: bgColor,
+              textFormat: { fontFamily: FONT_FAMILY, fontSize: 10, foregroundColor: COLORS.text },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat)',
+        },
+      });
+      // Bold the header line of each alert block
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, totalCols),
+          cell: {
+            userEnteredFormat: {
+              textFormat: { fontFamily: FONT_FAMILY, fontSize: 11, bold: true, foregroundColor: COLORS.text },
+            },
+          },
+          fields: 'userEnteredFormat.textFormat',
+        },
+      });
+    }
+
+    if (block.type === 'table') {
+      const cols = block.columns || totalCols;
+      // Table header: blue background, white bold text
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, cols),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLORS.primary,
+              textFormat: {
+                fontFamily: FONT_FAMILY,
+                fontSize: 10,
+                bold: true,
+                foregroundColor: COLORS.white,
+              },
+              horizontalAlignment: 'CENTER',
+              verticalAlignment: 'MIDDLE',
+              padding: { top: 4, bottom: 4, left: 6, right: 6 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,padding)',
+        },
+      });
+      // Alternating rows for table data
+      const dataRows = block.endRow - block.startRow - 1;
+      for (let r = block.startRow + 1; r < block.endRow; r++) {
+        const isEven = (r - block.startRow - 1) % 2 === 0;
+        requests.push({
+          repeatCell: {
+            range: gridRange(sheetId, r, r + 1, 0, cols),
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: isEven ? COLORS.white : COLORS.surface,
+              },
+            },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        });
+      }
+      // Borders for the table
+      requests.push({
+        updateBorders: {
+          range: gridRange(sheetId, block.startRow, block.endRow, 0, cols),
+          top:    { style: 'SOLID', width: 1, color: COLORS.borderDark },
+          bottom: { style: 'SOLID', width: 1, color: COLORS.borderDark },
+          left:   { style: 'SOLID', width: 1, color: COLORS.borderDark },
+          right:  { style: 'SOLID', width: 1, color: COLORS.borderDark },
+          innerHorizontal: { style: 'SOLID', width: 1, color: COLORS.border },
+          innerVertical:   { style: 'SOLID', width: 1, color: COLORS.border },
+        },
+      });
+      // Freeze header is not needed for dashboard — it's short
+      // Center-align STT column
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 0, 1),
+          cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } },
+          fields: 'userEnteredFormat.horizontalAlignment',
+        },
+      });
+    }
+  }
+
+  return requests;
+}
+
+module.exports = { buildDailyReportFormatting, buildMainSheetFormatting, buildDashboardFormatting };
