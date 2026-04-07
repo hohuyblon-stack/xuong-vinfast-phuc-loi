@@ -78,7 +78,19 @@ function syncPrioritiesBatch(changes) {
 
 function syncDailyReport(tabName, rows, sectionRowIndices, summaryRowIndex) {
   fire(
-    () => sheets.writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex),
+    async () => {
+      await sheets.writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex);
+      // Cleanup BC tabs older than 7 days (today is always preserved).
+      // Non-blocking — failure is logged but does not break the report write.
+      try {
+        const deleted = await sheets.cleanupOldReportTabs(7);
+        if (deleted.length > 0) {
+          require('./logger').info('Old report tabs cleaned', { count: deleted.length });
+        }
+      } catch (err) {
+        require('./logger').error('Daily report cleanup failed (non-blocking)', { error: err.message });
+      }
+    },
     `dailyReport:${tabName}`,
   );
 }

@@ -582,6 +582,57 @@ function colLetter(n) {
   return result;
 }
 
+/**
+ * Delete report tabs (BC dd-MM-yyyy) older than `keepDays`.
+ *
+ * Daily report runs at 18:00 and creates a new "BC dd-MM-yyyy" tab each day
+ * via writeDailyReportTab. Without cleanup these accumulate forever, cluttering
+ * the spreadsheet (we hit 7+ stale tabs in production before noticing).
+ *
+ * Strategy: list tabs, parse dd-MM-yyyy from titles matching /^BC \d{2}-\d{2}-\d{4}$/,
+ * delete any older than keepDays. Skip the tab matching today's date to avoid
+ * a race when this runs concurrently with the daily report itself.
+ *
+ * Returns the list of deleted tab titles (empty if nothing to clean).
+ */
+async function cleanupOldReportTabs(keepDays = 7) {
+  const meta = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const tabs = meta.data.sheets || [];
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - keepDays * 24 * 60 * 60 * 1000);
+  const todayStr = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
+
+  const toDelete = [];
+  for (const s of tabs) {
+    const title = s.properties.title;
+    const match = title.match(/^BC (\d{2})-(\d{2})-(\d{4})$/);
+    if (!match) continue;
+    const [, dd, mm, yyyy] = match;
+    if (`${dd}-${mm}-${yyyy}` === todayStr) continue; // never delete today
+    const tabDate = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+    if (tabDate < cutoff) {
+      toDelete.push({ sheetId: s.properties.sheetId, title });
+    }
+  }
+
+  if (toDelete.length === 0) return [];
+
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: toDelete.map(t => ({ deleteSheet: { sheetId: t.sheetId } })),
+    },
+  });
+
+  logger.info('Cleaned up old report tabs', {
+    deleted: toDelete.length,
+    titles: toDelete.map(t => t.title),
+    keepDays,
+  });
+
+  return toDelete.map(t => t.title);
+}
+
 module.exports = {
   initSheets,
   appendMainRow,
@@ -594,4 +645,5 @@ module.exports = {
   getSheetIdByName,
   writeDashboardTab,
   rewriteMainTab,
+  cleanupOldReportTabs,
 };
