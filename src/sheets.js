@@ -102,6 +102,7 @@ async function ensureTabs() {
     { key: 'completed', name: tabNames.completed, columns: COLUMNS.completed },
     { key: 'log', name: tabNames.log, columns: COLUMNS.log },
     { key: 'review', name: tabNames.review, columns: COLUMNS.review },
+    { key: 'dashboard', name: 'TỔNG QUAN', columns: null }, // no header — fully managed by dashboard
   ];
 
   const addRequests = [];
@@ -122,6 +123,7 @@ async function ensureTabs() {
   }
 
   for (const tab of tabConfigs) {
+    if (!tab.columns) continue; // dashboard tab has no fixed header
     const range = `'${tab.name}'!A1:${colLetter(tab.columns.length)}1`;
     const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range });
     if (!res.data.values || res.data.values.length === 0) {
@@ -448,6 +450,125 @@ async function getSheetIdByName(name) {
 }
 
 // ──────────────────────────────────────────────
+// TỔNG QUAN (Dashboard tab — full rewrite each time)
+// ──────────────────────────────────────────────
+
+/**
+ * Write the dashboard tab. Clears all content, writes blocks, applies formatting.
+ * Moves tab to index 0 (first position).
+ *
+ * @param {string} tabName - Tab name (TỔNG QUAN)
+ * @param {Array<Array<string>>} rows - All rows to write (flat array of row arrays)
+ * @param {Array<{type: string, startRow: number, endRow: number, level?: string, columns?: number}>} blockPositions
+ */
+async function writeDashboardTab(tabName, rows, blockPositions) {
+  // 1. Get or create tab
+  const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const existing = spreadsheet.data.sheets;
+  let sheetId = null;
+  let currentIndex = -1;
+
+  for (const s of existing) {
+    if (s.properties.title === tabName) {
+      sheetId = s.properties.sheetId;
+      currentIndex = s.properties.index;
+      break;
+    }
+  }
+
+  if (sheetId == null) {
+    const addRes = await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: tabName } } }],
+      },
+    });
+    sheetId = addRes.data.replies[0].addSheet.properties.sheetId;
+    logger.info(`Created dashboard tab: "${tabName}"`);
+  }
+
+  // 2. Clear entire tab
+  await sheetsApi.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `'${tabName}'`,
+  });
+
+  // 3. Determine max columns across all rows
+  const maxCols = Math.max(...rows.map(r => r.length), 2);
+  const endCol = colLetter(maxCols);
+
+  // 4. Write all rows at once
+  if (rows.length > 0) {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${tabName}'!A1:${endCol}${rows.length}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: rows },
+    });
+  }
+
+  // 5. Apply formatting + move tab to index 0
+  try {
+    const { buildDashboardFormatting } = require('./sheets-format');
+    const formatRequests = buildDashboardFormatting(sheetId, blockPositions, rows.length, maxCols);
+
+    // Move tab to first position
+    if (currentIndex !== 0) {
+      formatRequests.push({
+        updateSheetProperties: {
+          properties: { sheetId, index: 0 },
+          fields: 'index',
+        },
+      });
+    }
+
+    if (formatRequests.length > 0) {
+      await sheetsApi.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: formatRequests },
+      });
+    }
+  } catch (err) {
+    logger.error('Dashboard formatting failed (non-blocking)', { error: err.message });
+  }
+
+  logger.info('Dashboard tab written', { tabName, rows: rows.length });
+}
+
+/**
+ * Rewrite the main tab (ĐANG TRONG XƯỞNG) as a sorted snapshot.
+ * Keeps header row (row 1), clears data rows (row 2+), writes sorted data.
+ *
+ * @param {Array<Array<string>>} rows - Data rows (without header)
+ */
+async function rewriteMainTab(rows) {
+  const mainTabName = tabNames.main;
+
+  // Clear data rows (keep header at row 1)
+  try {
+    await sheetsApi.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `'${mainTabName}'!A2:K`,
+    });
+  } catch (err) {
+    // Tab might be empty — that's fine
+    logger.warn('Clear main tab data rows failed (non-blocking)', { error: err.message });
+  }
+
+  if (rows.length === 0) return;
+
+  // Write sorted data starting at row 2
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${mainTabName}'!A2:K${rows.length + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+
+  logger.info('Main tab rewritten as snapshot', { rows: rows.length });
+}
+
+// ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
 
@@ -461,6 +582,274 @@ function colLetter(n) {
   return result;
 }
 
+/**
+ * Delete report tabs (BC dd-MM-yyyy) older than `keepDays`.
+ *
+ * Daily report runs at 18:00 and creates a new "BC dd-MM-yyyy" tab each day
+ * via writeDailyReportTab. Without cleanup these accumulate forever, cluttering
+ * the spreadsheet (we hit 7+ stale tabs in production before noticing).
+ *
+ * Strategy: list tabs, parse dd-MM-yyyy from titles matching /^BC \d{2}-\d{2}-\d{4}$/,
+ * delete any older than keepDays. Skip the tab matching today's date to avoid
+ * a race when this runs concurrently with the daily report itself.
+ *
+ * Returns the list of deleted tab titles (empty if nothing to clean).
+ */
+async function cleanupOldReportTabs(keepDays = 7) {
+  const meta = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const tabs = meta.data.sheets || [];
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - keepDays * 24 * 60 * 60 * 1000);
+  const todayStr = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
+
+  const toDelete = [];
+  for (const s of tabs) {
+    const title = s.properties.title;
+    const match = title.match(/^BC (\d{2})-(\d{2})-(\d{4})$/);
+    if (!match) continue;
+    const [, dd, mm, yyyy] = match;
+    if (`${dd}-${mm}-${yyyy}` === todayStr) continue; // never delete today
+    const tabDate = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+    if (tabDate < cutoff) {
+      toDelete.push({ sheetId: s.properties.sheetId, title });
+    }
+  }
+
+  if (toDelete.length === 0) return [];
+
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: toDelete.map(t => ({ deleteSheet: { sheetId: t.sheetId } })),
+    },
+  });
+
+  logger.info('Cleaned up old report tabs', {
+    deleted: toDelete.length,
+    titles: toDelete.map(t => t.title),
+    keepDays,
+  });
+
+  return toDelete.map(t => t.title);
+}
+
+/**
+ * Delete CẦN KIỂM TRA rows older than `keepDays`.
+ *
+ * Review rows accumulate forever otherwise (we hit 42 stale "Chưa xử lý" rows
+ * from late March before noticing). Source of truth lives in Supabase reviews
+ * table — Sheets is just a viewing surface for managers.
+ *
+ * Strategy: read column C (timestamp) for all rows, identify rows older than
+ * cutoff, delete via batchUpdate deleteDimension requests in reverse order
+ * (so indices stay valid).
+ *
+ * Returns count of rows deleted.
+ */
+async function cleanupOldReviewRows(keepDays = 7) {
+  const tab = tabNames.review;
+  const meta = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const sheet = (meta.data.sheets || []).find(s => s.properties.title === tab);
+  if (!sheet) return 0;
+  const sheetId = sheet.properties.sheetId;
+
+  // Read timestamp column (C) — format "dd/MM/yyyy HH:mm:ss"
+  const res = await sheetsApi.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${tab}'!C2:C`, // skip header
+  });
+  const timestamps = res.data.values || [];
+  if (timestamps.length === 0) return 0;
+
+  const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
+  const toDelete = []; // 0-based row indices in the sheet (header is row 0)
+
+  for (let i = 0; i < timestamps.length; i++) {
+    const ts = timestamps[i] && timestamps[i][0];
+    if (!ts) continue;
+    // Parse "dd/MM/yyyy HH:mm:ss"
+    const m = String(ts).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m) continue;
+    const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+    if (d.getTime() < cutoff) {
+      toDelete.push(i + 1); // +1 because we skipped header at index 0
+    }
+  }
+
+  if (toDelete.length === 0) return 0;
+
+  // Delete in reverse order so earlier indices stay valid
+  toDelete.sort((a, b) => b - a);
+  const requests = toDelete.map(rowIdx => ({
+    deleteDimension: {
+      range: { sheetId, dimension: 'ROWS', startIndex: rowIdx, endIndex: rowIdx + 1 },
+    },
+  }));
+
+  // Batch in chunks of 100 to avoid request size limits
+  const CHUNK = 100;
+  for (let i = 0; i < requests.length; i += CHUNK) {
+    await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: requests.slice(i, i + CHUNK) },
+    });
+  }
+
+  logger.info('Cleaned up old review rows', { deleted: toDelete.length, keepDays });
+  return toDelete.length;
+}
+
+/**
+ * Write a single AI briefing cell into the TỔNG QUAN dashboard tab.
+ *
+ * Called by ai-briefing.js after generating narrative. We append it as a new
+ * "block" at the bottom of the existing dashboard so it lives next to the
+ * data managers are already looking at — not in a separate tab where it gets
+ * forgotten. Cell location: row determined dynamically (after Block 4).
+ *
+ * @param {string} text - the narrative text to write
+ * @param {string} updatedAt - "HH:mm dd/MM/yyyy" formatted timestamp
+ */
+async function writeAiBriefingCell(text, updatedAt) {
+  const tab = 'TỔNG QUAN';
+  const meta = await sheetsApi.spreadsheets.get({ spreadsheetId });
+  const sheet = (meta.data.sheets || []).find(s => s.properties.title === tab);
+  if (!sheet) {
+    logger.warn('writeAiBriefingCell: TỔNG QUAN tab not found');
+    return;
+  }
+
+  // Find the next empty row (so we don't overwrite the dashboard data above)
+  const allRes = await sheetsApi.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${tab}'!A:A`,
+  });
+  const allRows = allRes.data.values || [];
+  // Briefing lives at a fixed offset after the last data row + 2 blank rows
+  const briefingStartRow = allRows.length + 2; // 1-based
+
+  const lines = [
+    [`🤖 NHẬN XÉT CỦA EM (cập nhật ${updatedAt})`],
+    [text],
+  ];
+
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${tab}'!A${briefingStartRow}:F${briefingStartRow + lines.length - 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: lines },
+  });
+
+  // Format: title row blue + bold, body row wrap + italic
+  const sheetId = sheet.properties.sheetId;
+  const formatRequests = [
+    // Title row
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: briefingStartRow - 1,
+          endRowIndex: briefingStartRow,
+          startColumnIndex: 0,
+          endColumnIndex: 6,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.102, green: 0.451, blue: 0.910 },
+            textFormat: {
+              fontFamily: 'Google Sans',
+              fontSize: 11,
+              bold: true,
+              foregroundColor: { red: 1, green: 1, blue: 1 },
+            },
+            horizontalAlignment: 'LEFT',
+            verticalAlignment: 'MIDDLE',
+            padding: { left: 8 },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,padding)',
+      },
+    },
+    // Merge title across A:F
+    {
+      mergeCells: {
+        range: {
+          sheetId,
+          startRowIndex: briefingStartRow - 1,
+          endRowIndex: briefingStartRow,
+          startColumnIndex: 0,
+          endColumnIndex: 6,
+        },
+        mergeType: 'MERGE_ALL',
+      },
+    },
+    // Body row: italic, wrap, light bg
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: briefingStartRow,
+          endRowIndex: briefingStartRow + 1,
+          startColumnIndex: 0,
+          endColumnIndex: 6,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.973, green: 0.976, blue: 0.980 },
+            textFormat: {
+              fontFamily: 'Google Sans',
+              fontSize: 11,
+              italic: true,
+              foregroundColor: { red: 0.125, green: 0.129, blue: 0.141 },
+            },
+            wrapStrategy: 'WRAP',
+            verticalAlignment: 'TOP',
+            padding: { left: 12, top: 8, bottom: 8, right: 12 },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment,padding)',
+      },
+    },
+    // Merge body across A:F
+    {
+      mergeCells: {
+        range: {
+          sheetId,
+          startRowIndex: briefingStartRow,
+          endRowIndex: briefingStartRow + 1,
+          startColumnIndex: 0,
+          endColumnIndex: 6,
+        },
+        mergeType: 'MERGE_ALL',
+      },
+    },
+    // Set body row tall enough for ~6 lines of wrapped text
+    {
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: 'ROWS',
+          startIndex: briefingStartRow,
+          endIndex: briefingStartRow + 1,
+        },
+        properties: { pixelSize: 140 },
+        fields: 'pixelSize',
+      },
+    },
+  ];
+
+  try {
+    await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: formatRequests },
+    });
+  } catch (err) {
+    logger.warn('AI briefing formatting failed (non-blocking)', { error: err.message });
+  }
+
+  logger.info('AI briefing cell written', { row: briefingStartRow, length: text.length });
+}
+
 module.exports = {
   initSheets,
   appendMainRow,
@@ -471,4 +860,9 @@ module.exports = {
   archiveCompletedVehicle,
   deleteMainRow,
   getSheetIdByName,
+  writeDashboardTab,
+  rewriteMainTab,
+  cleanupOldReportTabs,
+  cleanupOldReviewRows,
+  writeAiBriefingCell,
 };

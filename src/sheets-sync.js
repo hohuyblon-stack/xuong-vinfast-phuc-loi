@@ -78,9 +78,65 @@ function syncPrioritiesBatch(changes) {
 
 function syncDailyReport(tabName, rows, sectionRowIndices, summaryRowIndex) {
   fire(
-    () => sheets.writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex),
+    async () => {
+      await sheets.writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowIndex);
+      // Cleanup BC tabs older than 7 days (today is always preserved).
+      // Non-blocking — failure is logged but does not break the report write.
+      try {
+        const deleted = await sheets.cleanupOldReportTabs(7);
+        if (deleted.length > 0) {
+          require('./logger').info('Old report tabs cleaned', { count: deleted.length });
+        }
+      } catch (err) {
+        require('./logger').error('Daily report cleanup failed (non-blocking)', { error: err.message });
+      }
+    },
     `dailyReport:${tabName}`,
   );
+}
+
+// ──────────────────────────────────────────────
+// Dashboard sync with 30s throttle
+// ──────────────────────────────────────────────
+
+let dashboardTimer = null;
+let dashboardConfig = null;
+const DASHBOARD_THROTTLE_MS = 30 * 1000;
+
+/**
+ * Schedule a dashboard refresh with throttle.
+ * If multiple calls arrive within 30s, only the last one executes.
+ */
+function syncDashboard(config) {
+  dashboardConfig = config;
+
+  if (dashboardTimer) {
+    // Already scheduled — the pending timer will use the latest config
+    return;
+  }
+
+  dashboardTimer = setTimeout(() => {
+    dashboardTimer = null;
+    const cfg = dashboardConfig;
+    fire(async () => {
+      const { refreshDashboard } = require('./sheets-dashboard');
+      await refreshDashboard(cfg);
+    }, 'dashboard-refresh');
+  }, DASHBOARD_THROTTLE_MS);
+}
+
+/**
+ * Force immediate dashboard refresh (no throttle). For cron/scheduled use.
+ */
+function syncDashboardImmediate(config) {
+  if (dashboardTimer) {
+    clearTimeout(dashboardTimer);
+    dashboardTimer = null;
+  }
+  fire(async () => {
+    const { refreshDashboard } = require('./sheets-dashboard');
+    await refreshDashboard(config);
+  }, 'dashboard-refresh-immediate');
 }
 
 module.exports = {
@@ -92,4 +148,6 @@ module.exports = {
   syncVehiclePriority,
   syncPrioritiesBatch,
   syncDailyReport,
+  syncDashboard,
+  syncDashboardImmediate,
 };

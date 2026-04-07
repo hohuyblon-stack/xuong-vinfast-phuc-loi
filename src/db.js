@@ -297,6 +297,71 @@ async function updateVehiclePriority(vehicleId, priority, nowIso) {
 }
 
 // ──────────────────────────────────────────────
+// Dashboard queries
+// ──────────────────────────────────────────────
+
+/**
+ * Xe vào hoặc ra trong một ngày cụ thể (dùng cho dashboard).
+ * @param {string} dateIso - ISO date string cho startOf day
+ * @param {string} nextDateIso - ISO date string cho startOf ngày tiếp theo
+ */
+async function getVehiclesByDateRange(dateIso, nextDateIso, tz) {
+  const zone = tz || appTimezone;
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('vehicle_id, plate, time_in, time_out, duration_minutes, status, priority, vehicle_model')
+    .or(`time_in.gte.${dateIso},time_out.gte.${dateIso}`)
+    .or(`time_in.lt.${nextDateIso},time_out.lt.${nextDateIso}`)
+    .order('time_in', { ascending: true });
+
+  if (error) throw new Error(`getVehiclesByDateRange failed: ${error.message}`);
+
+  const now = DateTime.now().setZone(zone);
+  const startDt = DateTime.fromISO(dateIso, { zone });
+
+  return (data || []).filter(v => {
+    const tIn  = v.time_in  ? DateTime.fromISO(v.time_in,  { zone }) : null;
+    const tOut = v.time_out ? DateTime.fromISO(v.time_out, { zone }) : null;
+    return (tIn && tIn >= startDt && tIn < DateTime.fromISO(nextDateIso, { zone }))
+        || (tOut && tOut >= startDt && tOut < DateTime.fromISO(nextDateIso, { zone }));
+  }).map(v => ({
+    vehicleId:     v.vehicle_id,
+    plate:         v.plate,
+    timeIn:        fmtTs(v.time_in, zone),
+    timeOut:       fmtTs(v.time_out, zone),
+    timeInISO:     v.time_in,
+    timeOutISO:    v.time_out,
+    durationMinutes: v.duration_minutes,
+    status:        v.status,
+    priority:      v.priority,
+    vehicleModel:  v.vehicle_model || '',
+  }));
+}
+
+/**
+ * Xe vào/ra hôm nay.
+ */
+async function getTodayActivity(tz) {
+  const zone = tz || appTimezone;
+  const now = DateTime.now().setZone(zone);
+  const startOfDay = now.startOf('day').toISO();
+  const startOfTomorrow = now.plus({ days: 1 }).startOf('day').toISO();
+  return getVehiclesByDateRange(startOfDay, startOfTomorrow, zone);
+}
+
+/**
+ * Xe vào/ra hôm qua.
+ */
+async function getYesterdayActivity(tz) {
+  const zone = tz || appTimezone;
+  const now = DateTime.now().setZone(zone);
+  const yesterday = now.minus({ days: 1 });
+  const startOfYesterday = yesterday.startOf('day').toISO();
+  const startOfToday = now.startOf('day').toISO();
+  return getVehiclesByDateRange(startOfYesterday, startOfToday, zone);
+}
+
+// ──────────────────────────────────────────────
 // Daily summary (BAOCAO)
 // ──────────────────────────────────────────────
 
@@ -842,4 +907,7 @@ module.exports = {
   getRepeatVisitors,
   getDurationStats,
   getPendingReviews,
+  // Dashboard queries
+  getTodayActivity,
+  getYesterdayActivity,
 };

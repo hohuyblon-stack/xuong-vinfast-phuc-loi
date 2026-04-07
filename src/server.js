@@ -23,8 +23,16 @@ const {
   sendScheduledMorningBriefing,
   handleManualExit,
   sendEndOfDayReminder,
+  sendEveningSweepPrompt,
+  processSweepReply,
 } = require('./matcher');
-const { parseMessage, TEXT_ONLY_ACTIONS } = require('./utils');
+const { parseMessage, parseSweepReply, TEXT_ONLY_ACTIONS } = require('./utils');
+
+// In-memory state for evening sweep sessions (chatId → session).
+// See matcher.js sendEveningSweepPrompt for shape. Lost on process restart,
+// which is acceptable: Render starter plan does not sleep, and sessions only
+// live 4h after the 18h prompt.
+const sweepSessions = new Map();
 const { isValidWebhookSecret, isValidAdminKey } = require('./middleware');
 const logger = require('./logger');
 
@@ -267,6 +275,12 @@ async function bootstrap() {
   // Bao cao tu dong cuoi ngay luc 18:00
   scheduleDailyReport();
 
+  // Bot gui prompt 18:05 hoi bao ve check xe nghi ghost (sau daily-report 5p)
+  scheduleEveningSweep();
+
+  // AI briefing 2 lan/ngay (8h sang + 18h chieu)
+  scheduleAiBriefing();
+
   // Tu dong don dep xe ket moi ngay luc 5h sang
   scheduleStaleCleanup();
 
@@ -324,6 +338,17 @@ function scheduleStaleCleanup() {
         const expired = await expireStaleVehicles(cutoff, nowIso);
         if (expired > 0) {
           logger.info(`Auto-cleanup: ${expired} stale vehicles expired (>${STALE_DAYS} days)`);
+        }
+        // Also clean up the CẦN KIỂM TRA sheet tab — review rows older than 7 days.
+        // Source of truth is Supabase reviews table; the sheet is just a viewing surface.
+        try {
+          const sheets = require('./sheets');
+          const removed = await sheets.cleanupOldReviewRows(7);
+          if (removed > 0) {
+            logger.info(`Auto-cleanup: ${removed} stale review rows removed from sheet`);
+          }
+        } catch (err) {
+          logger.error('Review rows cleanup failed (non-blocking)', { error: err.message });
         }
       } catch (err) {
         logger.error('Scheduled stale cleanup failed', { error: err.message });
@@ -444,6 +469,28 @@ async function processMessageAsync(data) {
       await sendMessage(chatId, '❌ Có lỗi khi xử lý file Excel. Vui lòng thử lại nhé.');
     }
     return;
+  }
+
+  // ═══ EVENING SWEEP REPLY ═══
+  // Check before normal parseMessage: if there's an active sweep session for
+  // this chat AND the text is digits-only (e.g. "1 3 5"), treat as sweep reply.
+  // Otherwise fall through to normal command parsing.
+  const sweepIndices = parseSweepReply(text);
+  if (sweepIndices && sweepSessions.has(String(chatId))) {
+    const sweepResult = await processSweepReply(
+      sweepIndices,
+      chatId,
+      sweepSessions,
+      senderName,
+      config,
+    );
+    if (sweepResult) {
+      if (sweepResult.replyMessage) {
+        await sendMessage(chatId, sweepResult.replyMessage);
+      }
+      return;
+    }
+    // sweepResult === null means session expired/missing → fall through
   }
 
   // ═══ TEXT-ONLY COMMANDS ═══
@@ -591,6 +638,99 @@ function scheduleDailyReport() {
   }, 60 * 1000);
 
   logger.info(`Daily report scheduled at ${reportHour}:00`);
+}
+
+// ──────────────────────────────────────────────
+// Evening sweep prompt — push danh sách xe nghi ghost cho bảo vệ buổi chiều
+// ──────────────────────────────────────────────
+//
+// Fires once per day at SWEEP_HOUR:SWEEP_MINUTE (default 18:05, just after the
+// daily-report cron at 18:00). Calls sendEveningSweepPrompt which:
+//   1) Queries in-workshop vehicles >warningHours
+//   2) Sends numbered list to manager chats
+//   3) Stores session in sweepSessions Map (so subsequent digit replies parse)
+//
+// Reply handling lives in processMessageAsync below — checks sweepSessions
+// before normal parseMessage.
+
+// ──────────────────────────────────────────────
+// AI briefing — 2 lần/ngày (8h sáng + 18h chiều)
+// ──────────────────────────────────────────────
+//
+// Why 2 calls/day not 24:
+//   - Poe API costs ~$0.02/call → $1.20/month at 2x daily
+//   - Quản lý không mở sheet liên tục, briefing stale 12h vẫn đủ ngữ cảnh
+//   - Sheets API write quota 500/day → leave headroom for other writes
+//
+// 8h: morning briefing (after morning-briefing telegram cron at 7h)
+// 18h: end-of-day reflection (after daily-report at 18h, sweep at 18:05)
+// Both run after their telegram counterparts, so the briefing can reflect
+// what just got reported.
+
+function scheduleAiBriefing() {
+  const HOURS = (process.env.AI_BRIEFING_HOURS || '8,18')
+    .split(',')
+    .map(h => parseInt(h.trim(), 10))
+    .filter(h => h >= 0 && h <= 23);
+
+  if (HOURS.length === 0) {
+    logger.info('AI briefing disabled (AI_BRIEFING_HOURS empty)');
+    return;
+  }
+
+  const lastRunByHour = {}; // { hour: 'YYYY-MM-DD' }
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+    const currentHour = now.hour;
+
+    if (HOURS.includes(currentHour) && lastRunByHour[currentHour] !== todayStr) {
+      lastRunByHour[currentHour] = todayStr;
+      try {
+        const { refreshAiBriefing } = require('./ai-briefing');
+        await refreshAiBriefing(config);
+      } catch (err) {
+        logger.error('AI briefing run failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`AI briefing scheduled at hours: ${HOURS.join(', ')}`);
+}
+
+function scheduleEveningSweep() {
+  const SWEEP_HOUR = parseInt(process.env.SWEEP_HOUR || '18', 10);
+  const SWEEP_MINUTE = parseInt(process.env.SWEEP_MINUTE || '5', 10);
+  const chatIds = config.manager.chatIds;
+
+  if (chatIds.length === 0) {
+    logger.info('No manager chat IDs - evening sweep disabled');
+    return;
+  }
+
+  let lastSweepDate = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const todayStr = now.toFormat('yyyy-MM-dd');
+
+    // Fire on or after SWEEP_HOUR:SWEEP_MINUTE, once per day
+    const triggered =
+      now.hour > SWEEP_HOUR ||
+      (now.hour === SWEEP_HOUR && now.minute >= SWEEP_MINUTE);
+
+    if (triggered && lastSweepDate !== todayStr) {
+      lastSweepDate = todayStr;
+      try {
+        await sendEveningSweepPrompt(config, sweepSessions, sendMessage);
+      } catch (err) {
+        logger.error('Evening sweep prompt failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`Evening sweep scheduled at ${SWEEP_HOUR}:${String(SWEEP_MINUTE).padStart(2, '0')}`);
 }
 
 // ──────────────────────────────────────────────
