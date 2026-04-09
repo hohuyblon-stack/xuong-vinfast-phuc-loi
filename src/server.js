@@ -205,6 +205,18 @@ async function bootstrap() {
     }
   });
 
+  // Admin: force refresh dashboard (TỔNG QUAN)
+  app.post('/admin/refresh-dashboard', requireAdminKey, async (_req, res) => {
+    try {
+      const { refreshDashboard } = require('./sheets-dashboard');
+      await refreshDashboard(config);
+      res.json({ status: 'ok', message: 'Dashboard refreshed' });
+    } catch (err) {
+      logger.error('Admin dashboard refresh failed', { error: err.message });
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: xem tồn kho count
   app.get('/admin/workshop-count', requireAdminKey, async (_req, res) => {
     try {
@@ -250,9 +262,15 @@ async function bootstrap() {
     }
 
     // Init Google Sheets mirror in background — non-fatal, Supabase is source of truth
-    initSheets(config.sheets).catch(err => {
-      logger.warn('Google Sheets init failed — mirror disabled', { error: err.message });
-    });
+    // After init succeeds, immediately refresh dashboard to recover from sleep/restart
+    initSheets(config.sheets)
+      .then(() => {
+        logger.info('Sheets ready — triggering startup dashboard refresh');
+        syncDashboardImmediate(config);
+      })
+      .catch(err => {
+        logger.warn('Google Sheets init failed — mirror disabled', { error: err.message });
+      });
   });
 
   // Check alerts moi 30 phut
