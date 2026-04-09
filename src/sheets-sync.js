@@ -13,12 +13,23 @@
 const sheets = require('./sheets');
 const logger  = require('./logger');
 
+let lastDashboardRefreshAt = null;
+
 function fire(fn, context) {
   Promise.resolve()
     .then(fn)
+    .then(() => {
+      if (context.startsWith('dashboard-refresh')) {
+        lastDashboardRefreshAt = new Date();
+      }
+    })
     .catch(err => {
       logger.error('Sheets sync failed', { context, error: err.message });
     });
+}
+
+function getDashboardHealth() {
+  return lastDashboardRefreshAt;
 }
 
 function syncVehicleIn(row) {
@@ -150,4 +161,5 @@ module.exports = {
   syncDailyReport,
   syncDashboard,
   syncDashboardImmediate,
+  getDashboardHealth,
 };

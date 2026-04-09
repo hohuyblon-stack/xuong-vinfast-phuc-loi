@@ -27,7 +27,7 @@ const {
   processSweepReply,
 } = require('./matcher');
 const { parseMessage, parseSweepReply, TEXT_ONLY_ACTIONS } = require('./utils');
-const { syncDashboardImmediate } = require('./sheets-sync');
+const { syncDashboardImmediate, getDashboardHealth } = require('./sheets-sync');
 
 // In-memory state for evening sweep sessions (chatId → session).
 // See matcher.js sendEveningSweepPrompt for shape. Lost on process restart,
@@ -62,9 +62,22 @@ async function bootstrap() {
 
   // ──── Routes ────
 
-  // Health check
+  // Health check — includes dashboard staleness warning
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'xuong-vinfast-phuc-loi', time: new Date().toISOString() });
+    const lastRefresh = getDashboardHealth();
+    const staleMs = lastRefresh ? Date.now() - lastRefresh.getTime() : null;
+    const STALE_THRESHOLD_MS = 13 * 60 * 60 * 1000; // 13h — should refresh every 12h
+    const dashboardStale = staleMs !== null && staleMs > STALE_THRESHOLD_MS;
+
+    res.json({
+      status: dashboardStale ? 'degraded' : 'ok',
+      service: 'xuong-vinfast-phuc-loi',
+      time: new Date().toISOString(),
+      dashboard: {
+        lastRefresh: lastRefresh ? lastRefresh.toISOString() : 'never (since boot)',
+        stale: dashboardStale,
+      },
+    });
   });
 
   // Webhook health check + auto-heal

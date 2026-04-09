@@ -173,6 +173,7 @@ async function processVehicleEvent(event, config) {
       note:      '',
       updatedAt: now,
     });
+    sheetsSync.syncDashboard(config);
 
     logger.info('Vehicle IN processed', { vehicleId: decision.vehicle_id, plate });
     let replyMsg = `Cảm ơn! ✅ Đã ghi nhận xe VÀO xưởng\nBiển số: ${plate}`;
@@ -214,6 +215,7 @@ async function processVehicleEvent(event, config) {
     priority:  'Bình thường',
     updatedAt: now,
   });
+  sheetsSync.syncDashboard(config);
 
   logger.info('Vehicle OUT processed', { vehicleId: decision.vehicle_id, plate, duration });
   let replyMsgOut = `Cảm ơn! 🏁 Đã ghi nhận xe RA xưởng\nBiển số: ${plate}`;
