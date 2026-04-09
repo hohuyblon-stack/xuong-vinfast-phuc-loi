@@ -487,10 +487,23 @@ async function writeDashboardTab(tabName, rows, blockPositions) {
     logger.info(`Created dashboard tab: "${tabName}"`);
   }
 
-  // 2. Clear entire tab
+  // 2. Clear entire tab: values + stale merges from prior runs.
+  //    Leftover merges cause values.update to discard columns B+ on merged rows.
   await sheetsApi.spreadsheets.values.clear({
     spreadsheetId,
     range: `'${tabName}'`,
+  });
+
+  // Unmerge all cells so the next write isn't corrupted by stale merges
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        unmergeCells: {
+          range: { sheetId, startRowIndex: 0, endRowIndex: 9999, startColumnIndex: 0, endColumnIndex: 26 },
+        },
+      }],
+    },
   });
 
   // 3. Determine max columns and normalize all rows to same width.
