@@ -27,6 +27,7 @@ const {
   processSweepReply,
 } = require('./matcher');
 const { parseMessage, parseSweepReply, TEXT_ONLY_ACTIONS } = require('./utils');
+const { syncDashboardImmediate } = require('./sheets-sync');
 
 // In-memory state for evening sweep sessions (chatId → session).
 // See matcher.js sendEveningSweepPrompt for shape. Lost on process restart,
@@ -289,6 +290,9 @@ async function bootstrap() {
 
   // Tu dong kiem tra va heal webhook moi 30 phut
   scheduleWebhookCheck();
+
+  // Tu dong refresh tab TỔNG QUAN luc 6h va 18h15
+  scheduleDashboardRefresh();
 }
 
 function scheduleEndOfDayReminder() {
@@ -446,6 +450,37 @@ function scheduleWebhookCheck() {
   }, 30 * 60 * 1000);
 
   logger.info('Webhook self-heal check scheduled every 30 minutes');
+}
+
+// ──────────────────────────────────────────────
+// Scheduled dashboard (TỔNG QUAN) refresh
+// ──────────────────────────────────────────────
+// Fires at 6:00 (before morning briefing) and 18:15 (after daily report).
+
+function scheduleDashboardRefresh() {
+  const HOURS = [6, 18];
+  const MINUTE = 15; // 6:15 and 18:15
+
+  let lastRefreshKey = '';
+  setInterval(async () => {
+    const { DateTime } = require('luxon');
+    const now = DateTime.now().setZone(config.timezone);
+    const h = now.hour;
+    const m = now.minute;
+    const key = `${now.toFormat('yyyy-MM-dd')}-${h}`;
+
+    if (HOURS.includes(h) && m >= MINUTE && lastRefreshKey !== key) {
+      lastRefreshKey = key;
+      try {
+        syncDashboardImmediate(config);
+        logger.info('Scheduled dashboard refresh fired', { hour: h });
+      } catch (err) {
+        logger.error('Scheduled dashboard refresh failed', { error: err.message });
+      }
+    }
+  }, 60 * 1000);
+
+  logger.info(`Dashboard refresh scheduled at hours: ${HOURS.join(', ')}:${String(MINUTE).padStart(2, '0')}`);
 }
 
 // ──────────────────────────────────────────────
