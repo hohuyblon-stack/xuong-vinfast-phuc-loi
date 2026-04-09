@@ -493,17 +493,25 @@ async function writeDashboardTab(tabName, rows, blockPositions) {
     range: `'${tabName}'`,
   });
 
-  // 3. Determine max columns across all rows
+  // 3. Determine max columns and normalize all rows to same width.
+  //    Mixed-length rows (hero=2 cols, tables=6 cols) cause the Sheets API
+  //    to corrupt trailing data in subsequent rows. Pad every row to maxCols.
   const maxCols = Math.max(...rows.map(r => r.length), 2);
   const endCol = colLetter(maxCols);
+  const normalized = rows.map(r => {
+    if (r.length >= maxCols) return r;
+    const padded = [...r];
+    while (padded.length < maxCols) padded.push('');
+    return padded;
+  });
 
   // 4. Write all rows at once
-  if (rows.length > 0) {
+  if (normalized.length > 0) {
     await sheetsApi.spreadsheets.values.update({
       spreadsheetId,
-      range: `'${tabName}'!A1:${endCol}${rows.length}`,
+      range: `'${tabName}'!A1:${endCol}${normalized.length}`,
       valueInputOption: 'RAW',
-      requestBody: { values: rows },
+      requestBody: { values: normalized },
     });
   }
 
