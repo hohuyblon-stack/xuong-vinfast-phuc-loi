@@ -1,6 +1,7 @@
 'use strict';
 
 const axios = require('axios');
+const FormData = require('form-data');
 const logger = require('./logger');
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
@@ -137,4 +138,29 @@ async function getWebhookInfo() {
   return response.data.result;
 }
 
-module.exports = { initTelegram, extractUpdate, getFileUrl, sendMessage, setWebhook, getWebhookInfo };
+/**
+ * Gửi file (document) cho 1 chat qua Telegram.
+ * @param {string} chatId - Telegram chat ID
+ * @param {Buffer} fileBuffer - Nội dung file dạng Buffer
+ * @param {string} fileName - Tên file hiển thị (VD: "Báo-cáo-14-04-2026.xlsx")
+ * @param {string} [caption] - Chú thích kèm file (tuỳ chọn)
+ */
+async function sendDocument(chatId, fileBuffer, fileName, caption) {
+  try {
+    const form = new FormData();
+    form.append('chat_id', chatId);
+    form.append('document', fileBuffer, { filename: fileName });
+    if (caption) form.append('caption', caption);
+
+    await axios.post(`${TELEGRAM_API}${botToken}/sendDocument`, form, {
+      headers: form.getHeaders(),
+      timeout: 30000,
+    });
+
+    logger.info('Telegram file đã gửi', { chatId, fileName });
+  } catch (err) {
+    logger.error('Telegram gửi file thất bại', { error: err.message, chatId, fileName });
+  }
+}
+
+module.exports = { initTelegram, extractUpdate, getFileUrl, sendMessage, sendDocument, setWebhook, getWebhookInfo };

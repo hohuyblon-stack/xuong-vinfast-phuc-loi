@@ -5,6 +5,7 @@ const db         = require('./db');
 const sheetsSync = require('./sheets-sync');
 const utils      = require('./utils');
 const intel      = require('./report-intelligence');
+const { buildDailyExcelReport } = require('./excel-report');
 const logger     = require('./logger');
 
 /**
@@ -1063,6 +1064,51 @@ function fmtIso(isoTs, tz) {
   return DateTime.fromISO(isoTs, { zone: tz }).toFormat('dd/MM/yyyy HH:mm:ss');
 }
 
+/**
+ * Tạo file Excel báo cáo nhật ký hàng ngày và gửi vào nhóm Telegram.
+ * Thay thế báo cáo text cũ — gửi file .xlsx trực tiếp.
+ */
+async function sendDailyExcelReport(config) {
+  const tz = config.timezone;
+  const { DateTime: Dt } = require('luxon');
+  const now = Dt.now().setZone(tz);
+
+  const [todayVehicles, inWorkshopVehicles] = await Promise.all([
+    db.getTodayActivity(tz),
+    db.getAllInWorkshop(tz),
+  ]);
+
+  const buffer = await buildDailyExcelReport(todayVehicles, inWorkshopVehicles, tz);
+  const fileName = `Báo-cáo-${now.toFormat('dd-MM-yyyy')}.xlsx`;
+
+  const totalIn = todayVehicles.filter(v => {
+    const tIn = v.timeInISO ? Dt.fromISO(v.timeInISO, { zone: tz }) : null;
+    return tIn && tIn >= now.startOf('day') && tIn < now.plus({ days: 1 }).startOf('day');
+  }).length;
+  const totalOut = todayVehicles.filter(v => {
+    const tOut = v.timeOutISO ? Dt.fromISO(v.timeOutISO, { zone: tz }) : null;
+    return tOut && tOut >= now.startOf('day') && tOut < now.plus({ days: 1 }).startOf('day');
+  }).length;
+
+  const caption =
+    `📊 Báo cáo ngày ${now.toFormat('dd/MM/yyyy')}\n` +
+    `Vào: ${totalIn} • Ra: ${totalOut} • Trong xưởng: ${inWorkshopVehicles.length}`;
+
+  const { sendDocument } = require('./telegram');
+  const chatIds = config.manager.chatIds;
+  for (const chatId of chatIds) {
+    await sendDocument(chatId, buffer, fileName, caption);
+  }
+
+  // Đồng bộ tab BC vào Sheets (giữ nguyên)
+  syncDailyReportToSheets(
+    await db.getFullDailyReport(tz),
+    tz,
+  );
+
+  logger.info('Báo cáo Excel hàng ngày đã gửi', { fileName, chatIds: chatIds.length });
+}
+
 module.exports = {
   processVehicleEvent,
   checkTimeAlerts,
@@ -1074,6 +1120,7 @@ module.exports = {
   handleAccountingReport,
   handleFullReport,
   sendScheduledFullReport,
+  sendDailyExcelReport,
   handleMorningBriefing,
   sendScheduledMorningBriefing,
   handleManualExit,

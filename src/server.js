@@ -15,6 +15,7 @@ const {
   handleHelp,
   handleDailyReport,
   sendScheduledDailyReport,
+  sendDailyExcelReport,
   handleProductivityReport,
   handleAccountingReport,
   handleFullReport,
@@ -696,9 +697,9 @@ function scheduleDailyReport() {
     if (currentHour === reportHour && lastReportDate !== todayStr) {
       lastReportDate = todayStr;
       try {
-        await sendScheduledFullReport(config);
+        await sendDailyExcelReport(config);
       } catch (err) {
-        logger.error('Scheduled daily report failed', { error: err.message });
+        logger.error('Báo cáo Excel hàng ngày thất bại', { error: err.message });
       }
     }
   }, 60 * 1000);

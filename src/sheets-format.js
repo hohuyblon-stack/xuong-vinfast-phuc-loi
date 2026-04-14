@@ -549,6 +549,69 @@ function buildDashboardFormatting(sheetId, blockPositions, totalRows, totalCols)
         },
       });
     }
+
+    if (block.type === 'briefing') {
+      // Tiêu đề: nền xanh, chữ trắng đậm
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, totalCols),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLORS.primary,
+              textFormat: {
+                fontFamily: FONT_FAMILY, fontSize: 11, bold: true,
+                foregroundColor: COLORS.white,
+              },
+              horizontalAlignment: 'LEFT',
+              verticalAlignment: 'MIDDLE',
+              padding: { left: 8 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,padding)',
+        },
+      });
+      // Merge tiêu đề
+      requests.push({
+        mergeCells: {
+          range: gridRange(sheetId, block.startRow, block.startRow + 1, 0, totalCols),
+          mergeType: 'MERGE_ALL',
+        },
+      });
+      // Nội dung: nền xám nhạt, chữ nghiêng, wrap text
+      requests.push({
+        repeatCell: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 0, totalCols),
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLORS.surface,
+              textFormat: {
+                fontFamily: FONT_FAMILY, fontSize: 11, italic: true,
+                foregroundColor: COLORS.text,
+              },
+              wrapStrategy: 'WRAP',
+              verticalAlignment: 'TOP',
+              padding: { left: 12, top: 8, bottom: 8, right: 12 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment,padding)',
+        },
+      });
+      // Merge nội dung
+      requests.push({
+        mergeCells: {
+          range: gridRange(sheetId, block.startRow + 1, block.endRow, 0, totalCols),
+          mergeType: 'MERGE_ALL',
+        },
+      });
+      // Chiều cao dòng nội dung đủ cho ~6 dòng text
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId, dimension: 'ROWS', startIndex: block.startRow + 1, endIndex: block.endRow },
+          properties: { pixelSize: 140 },
+          fields: 'pixelSize',
+        },
+      });
+    }
   }
 
   return requests;

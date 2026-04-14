@@ -7,6 +7,9 @@ let sheetsApi = null;
 let spreadsheetId = '';
 let tabNames = {};
 
+// Cache sheetId theo tên tab — tránh gọi spreadsheets.get() mỗi lần
+const sheetIdCache = new Map();
+
 // ──────────────────────────────────────────────
 // Column definitions cho moi tab
 // ──────────────────────────────────────────────
@@ -70,6 +73,11 @@ async function ensureTabs() {
   const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
   const sheets = spreadsheet.data.sheets;
   const existingNames = sheets.map(s => s.properties.title);
+
+  // Nạp cache sheetId ngay khi khởi động
+  for (const s of sheets) {
+    sheetIdCache.set(s.properties.title, s.properties.sheetId);
+  }
 
   // Rename old tabs if found (one-time migration)
   const renameRequests = [];
@@ -241,7 +249,7 @@ async function batchUpdatePriorities(changes) {
 // ──────────────────────────────────────────────
 
 async function appendLogRow(row) {
-  const values = [[
+  const values = [
     row.eventId,
     row.timestamp,
     row.recordType || 'Không xác định',
@@ -251,17 +259,10 @@ async function appendLogRow(row) {
     row.sender || '',
     row.originalMessage || '',
     row.result || '',
-  ]];
+  ];
 
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${tabNames.log}'!A:I`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
-
-  logger.info('Appended log row', { eventId: row.eventId });
+  await prependRow(tabNames.log, values, COLUMNS.log.length);
+  logger.info('Ghi nhật ký (mới nhất trên đầu)', { eventId: row.eventId });
 }
 
 // updateLogResult REMOVED — log tab is append-only, result stored in DB
@@ -271,7 +272,7 @@ async function appendLogRow(row) {
 // ──────────────────────────────────────────────
 
 async function appendReviewRow(row) {
-  const values = [[
+  const values = [
     row.errorId,
     row.eventId,
     row.timestamp,
@@ -285,17 +286,10 @@ async function appendReviewRow(row) {
     row.reviewer || '',
     row.resolvedAt || '',
     row.linkedVehicleId || '',
-  ]];
+  ];
 
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${tabNames.review}'!A:M`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
-
-  logger.info('Appended review row', { errorId: row.errorId, reason: row.reason });
+  await prependRow(tabNames.review, values, COLUMNS.review.length);
+  logger.info('Ghi cần kiểm tra (mới nhất trên đầu)', { errorId: row.errorId, reason: row.reason });
 }
 
 // ──────────────────────────────────────────────
@@ -386,7 +380,7 @@ async function writeDailyReportTab(tabName, rows, sectionRowIndices, summaryRowI
  * Append a completed vehicle row to the "ĐÃ HOÀN THÀNH" tab.
  */
 async function archiveCompletedVehicle(rowData) {
-  const values = [[
+  const values = [
     rowData.vehicleId || '',
     rowData.plate || '',
     rowData.timeIn || '',
@@ -398,17 +392,10 @@ async function archiveCompletedVehicle(rowData) {
     rowData.priority || '',
     rowData.note || '',
     rowData.updatedAt || '',
-  ]];
+  ];
 
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `'${tabNames.completed}'!A:K`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values },
-  });
-
-  logger.info('Archived completed vehicle', { plate: rowData.plate });
+  await prependRow(tabNames.completed, values, COLUMNS.completed.length);
+  logger.info('Xe đã ra xưởng (mới nhất trên đầu)', { plate: rowData.plate });
 }
 
 /**
@@ -441,12 +428,18 @@ async function deleteMainRow(rowIndex) {
 }
 
 /**
- * Get the sheetId (numeric) for a tab by name.
+ * Lấy sheetId (số) theo tên tab. Dùng cache để tránh gọi API mỗi lần.
+ * Cache được nạp khi initSheets() và khi tạo tab mới.
  */
 async function getSheetIdByName(name) {
+  if (sheetIdCache.has(name)) return sheetIdCache.get(name);
+
   const spreadsheet = await sheetsApi.spreadsheets.get({ spreadsheetId });
-  const sheet = spreadsheet.data.sheets.find(s => s.properties.title === name);
-  return sheet ? sheet.properties.sheetId : null;
+  // Nạp lại toàn bộ cache
+  for (const s of spreadsheet.data.sheets) {
+    sheetIdCache.set(s.properties.title, s.properties.sheetId);
+  }
+  return sheetIdCache.get(name) ?? null;
 }
 
 // ──────────────────────────────────────────────
@@ -592,6 +585,41 @@ async function rewriteMainTab(rows) {
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
+
+/**
+ * Chèn 1 dòng vào đầu tab (sau header) — mới nhất trên đầu.
+ * Bước 1: insertDimension tạo dòng trống ở row 2
+ * Bước 2: values.update ghi dữ liệu vào dòng mới
+ */
+async function prependRow(tabName, values, colCount) {
+  const sheetId = await getSheetIdByName(tabName);
+  if (sheetId == null) {
+    logger.error('prependRow: không tìm thấy tab', { tabName });
+    return;
+  }
+
+  // Chèn 1 dòng trống sau header (row index 1 = dòng 2)
+  await sheetsApi.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        insertDimension: {
+          range: { sheetId, dimension: 'ROWS', startIndex: 1, endIndex: 2 },
+          inheritFromBefore: false,
+        },
+      }],
+    },
+  });
+
+  // Ghi dữ liệu vào dòng vừa chèn
+  const endCol = colLetter(colCount);
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${tabName}'!A2:${endCol}2`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [values] },
+  });
+}
 
 function colLetter(n) {
   let result = '';

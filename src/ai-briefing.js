@@ -28,8 +28,10 @@ const {
   getTodayActivity,
   getWeeklyAverages,
 } = require('./db');
-const sheets = require('./sheets');
 const logger = require('./logger');
+
+// Lưu briefing mới nhất trong bộ nhớ — dashboard đọc qua getLatestBriefing()
+let latestBriefing = null;
 
 const POE_BASE_URL = process.env.POE_API_ENDPOINT || 'https://api.poe.com/v1/chat/completions';
 
@@ -306,14 +308,21 @@ async function refreshAiBriefing(config) {
   const anomalies = detectAnomalies(snapshot);
   const narrative = await generateNarrative(snapshot, anomalies, config);
 
-  // Write to dashboard
+  // Lưu narrative để dashboard gộp vào Block 5 (không ghi riêng nữa)
+  latestBriefing = {
+    narrative,
+    updatedAt: snapshot.currentTime + ' ' + snapshot.today,
+  };
+
+  // Trigger dashboard refresh để ghi briefing mới vào Sheets ngay
   try {
-    await sheets.writeAiBriefingCell(narrative, snapshot.currentTime + ' ' + snapshot.today);
+    const { syncDashboardImmediate } = require('./sheets-sync');
+    syncDashboardImmediate(config);
   } catch (err) {
-    logger.error('AI briefing write failed', { error: err.message });
+    logger.error('Dashboard refresh sau AI briefing thất bại', { error: err.message });
   }
 
-  logger.info('AI briefing refreshed', {
+  logger.info('AI briefing đã cập nhật', {
     anomalyCount: anomalies.length,
     anomalyCodes: anomalies.map(a => a.code),
     narrativeLength: narrative.length,
@@ -322,11 +331,20 @@ async function refreshAiBriefing(config) {
   return { snapshot, anomalies, narrative };
 }
 
+/**
+ * Lấy briefing mới nhất (để dashboard gộp vào Block 5).
+ * Trả về null nếu chưa chạy AI briefing lần nào.
+ */
+function getLatestBriefing() {
+  return latestBriefing;
+}
+
 module.exports = {
   detectAnomalies,
   buildUserPrompt,
   fallbackNarrative,
   generateNarrative,
   refreshAiBriefing,
+  getLatestBriefing,
   PERSONA_SYSTEM_PROMPT,
 };

@@ -13,10 +13,12 @@ const { DateTime } = require('luxon');
 const {
   getInWorkshopWithHours,
   getTodayActivity,
+  getYesterdayActivity,
   getAllInWorkshop,
   getWeeklyAverages,
 } = require('./db');
 const sheets = require('./sheets');
+const { getLatestBriefing } = require('./ai-briefing');
 const logger = require('./logger');
 
 const TAB_NAME = 'TỔNG QUAN';
@@ -30,9 +32,10 @@ async function refreshDashboard(config) {
   const now = DateTime.now().setZone(tz);
 
   // Parallel queries
-  const [inWorkshop, todayVehicles, weeklyAvg] = await Promise.all([
+  const [inWorkshop, todayVehicles, yesterdayVehicles, weeklyAvg] = await Promise.all([
     getInWorkshopWithHours(tz),
     getTodayActivity(tz),
+    getYesterdayActivity(tz),
     getWeeklyAverages(tz, 7),
   ]);
 
@@ -45,6 +48,18 @@ async function refreshDashboard(config) {
   const todayOut = todayVehicles.filter(v => {
     const tOut = v.timeOutISO ? DateTime.fromISO(v.timeOutISO, { zone: tz }) : null;
     return tOut && tOut >= now.startOf('day') && tOut < now.plus({ days: 1 }).startOf('day');
+  }).length;
+
+  // ── Yesterday counts (cho manager so sánh khi hôm nay mới bắt đầu) ──
+  const yesterdayStart = now.minus({ days: 1 }).startOf('day');
+  const yesterdayEnd = now.startOf('day');
+  const yesterdayIn = yesterdayVehicles.filter(v => {
+    const t = v.timeInISO ? DateTime.fromISO(v.timeInISO, { zone: tz }) : null;
+    return t && t >= yesterdayStart && t < yesterdayEnd;
+  }).length;
+  const yesterdayOut = yesterdayVehicles.filter(v => {
+    const t = v.timeOutISO ? DateTime.fromISO(v.timeOutISO, { zone: tz }) : null;
+    return t && t >= yesterdayStart && t < yesterdayEnd;
   }).length;
 
   // ── Sort in-workshop by hoursIn descending ──
@@ -76,8 +91,8 @@ async function refreshDashboard(config) {
   const heroTitle = `HÔM NAY ${now.toFormat('dd/MM/yyyy')}  —  ${verdict}  —  cập nhật ${now.toFormat('HH:mm')}`;
   const heroRows = [
     [heroTitle, ''],
-    ['Vào hôm nay:', `${todayIn}    (TB tuần: ${weeklyAvg.avgDailyIn})`],
-    ['Ra hôm nay:',  `${todayOut}    (TB tuần: ${weeklyAvg.avgDailyOut})`],
+    ['Vào hôm nay:', `${todayIn}    (hôm qua: ${yesterdayIn} | TB tuần: ${weeklyAvg.avgDailyIn})`],
+    ['Ra hôm nay:',  `${todayOut}    (hôm qua: ${yesterdayOut} | TB tuần: ${weeklyAvg.avgDailyOut})`],
     ['Đang sửa (≤48h):', String(activelyRepairing)],
   ];
 
@@ -213,7 +228,20 @@ async function refreshDashboard(config) {
   }
   blockPositions.push({ type: 'table', startRow: activityStartRow, endRow: currentRow, columns: 6 });
 
-  // Write to Sheets
+  // Block 5: NHẬN XÉT AI (nếu đã có briefing)
+  const briefing = getLatestBriefing();
+  if (briefing) {
+    blocks.push(['', '', '', '', '', '']);
+    currentRow++;
+    const briefingStartRow = currentRow;
+    blocks.push([`🤖 NHẬN XÉT CỦA EM (cập nhật ${briefing.updatedAt})`, '', '', '', '', '']);
+    currentRow++;
+    blocks.push([briefing.narrative, '', '', '', '', '']);
+    currentRow++;
+    blockPositions.push({ type: 'briefing', startRow: briefingStartRow, endRow: currentRow });
+  }
+
+  // Ghi toàn bộ dashboard trong 1 lần write duy nhất
   await sheets.writeDashboardTab(TAB_NAME, blocks, blockPositions);
 
   // Rewrite main tab as sorted snapshot

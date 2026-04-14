@@ -32,9 +32,12 @@ function getDashboardHealth() {
   return lastDashboardRefreshAt;
 }
 
-function syncVehicleIn(row) {
-  const { vehicleModel, ...rowWithoutModel } = row;
-  fire(() => sheets.appendMainRow(rowWithoutModel), `appendMainRow:${row.vehicleId}`);
+/**
+ * Xe vào: không append riêng nữa — dashboard refresh sẽ rewrite toàn bộ tab.
+ * appendMainRow cũ bị ghi đè bởi rewriteMainTab 30s sau → lãng phí API call.
+ */
+function syncVehicleIn(_row) {
+  // Bỏ appendMainRow — syncDashboard() đã xử lý qua rewriteMainTab()
 }
 
 /**
@@ -77,14 +80,11 @@ function syncVehiclePriority(_plate, _priority, _updatedAt) {
 }
 
 /**
- * Batch update all priority changes in 2 API calls (1 read + 1 write).
- * Replaces N × syncVehiclePriority (was N × 2 API calls).
+ * Bỏ batch priority sync — dashboard refresh rewrite toàn bộ main tab mỗi 30s,
+ * đã bao gồm priority từ Supabase. Ghi riêng priority rồi bị ghi đè → lãng phí.
  */
-function syncPrioritiesBatch(changes) {
-  fire(
-    () => sheets.batchUpdatePriorities(changes),
-    `batchPriority:${changes.length}`,
-  );
+function syncPrioritiesBatch(_changes) {
+  // No-op — rewriteMainTab() trong dashboard refresh đã xử lý
 }
 
 function syncDailyReport(tabName, rows, sectionRowIndices, summaryRowIndex) {
